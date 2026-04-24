@@ -101,7 +101,11 @@ class PlaywrightManager:
             if PROXY_URL:
                 launch_args["proxy"] = {"server": PROXY_URL}
 
-            self._browser = pw.chromium.launch(**launch_args)
+            try:
+                self._browser = pw.chromium.launch(channel="chrome", **launch_args)
+            except Exception as e:
+                print(f"[PlaywrightManager] Real Chrome unavailable ({e}), falling back to bundled Chromium.")
+                self._browser = pw.chromium.launch(**launch_args)
 
             storage = SESSION_FILE if os.path.exists(SESSION_FILE) else None
             self._context = self._browser.new_context(
@@ -142,25 +146,145 @@ class PlaywrightManager:
 
     def _apply_stealth(self, context: BrowserContext):
         context.add_init_script("""
+            // --- navigator.webdriver ---
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [
-                { name: 'Chrome PDF Plugin' },
-                { name: 'Chrome PDF Viewer' },
-                { name: 'Native Client' }
-            ]});
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
+
+            // --- navigator.plugins (realistic with MimeType objects) ---
+            const makeMime = (type, desc, suffixes) => {
+                const m = Object.create(MimeType.prototype);
+                Object.defineProperties(m, {
+                    type:        { get: () => type },
+                    description: { get: () => desc },
+                    suffixes:    { get: () => suffixes },
+                });
+                return m;
+            };
+            const makePlugin = (name, desc, filename, mimes) => {
+                const p = Object.create(Plugin.prototype);
+                Object.defineProperties(p, {
+                    name:        { get: () => name },
+                    description: { get: () => desc },
+                    filename:    { get: () => filename },
+                    length:      { get: () => mimes.length },
+                });
+                mimes.forEach((m, i) => { p[i] = m; });
+                return p;
+            };
+            const pdfMime1 = makeMime('application/x-google-chrome-pdf', 'Portable Document Format', 'pdf');
+            const pdfMime2 = makeMime('application/pdf', 'Portable Document Format', 'pdf');
+            const ncMime   = makeMime('application/x-nacl', 'Native Client Executable', 'nexe');
+            const plugins  = [
+                makePlugin('Chrome PDF Plugin',  'Portable Document Format', 'internal-pdf-viewer', [pdfMime1]),
+                makePlugin('Chrome PDF Viewer',  '', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', [pdfMime2]),
+                makePlugin('Native Client',       '', 'internal-nacl-plugin',             [ncMime]),
+            ];
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    const arr = [...plugins];
+                    arr.__proto__ = PluginArray.prototype;
+                    return arr;
+                }
             });
+
+            // --- navigator.languages / platform / hardwareConcurrency / deviceMemory ---
+            Object.defineProperty(navigator, 'languages',           { get: () => ['en-US', 'en'] });
+            Object.defineProperty(navigator, 'platform',            { get: () => 'Win32' });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            try { Object.defineProperty(navigator, 'deviceMemory',  { get: () => 8 }); } catch(e) {}
+
+            // --- window.chrome runtime object ---
+            if (!window.chrome) {
+                Object.defineProperty(window, 'chrome', {
+                    writable: true, enumerable: true, configurable: false,
+                    value: { runtime: {} }
+                });
+            }
+
+            // --- Remove CDP leak (cdc_ prefixed properties) ---
+            for (const key of Object.keys(window)) {
+                if (key.startsWith('cdc_')) {
+                    try { delete window[key]; } catch(e) {}
+                }
+            }
+            for (const key of Object.keys(document)) {
+                if (key.startsWith('cdc_')) {
+                    try { delete document[key]; } catch(e) {}
+                }
+            }
+
+            // --- WebGL vendor / renderer ---
             const origGetParam = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(p) {
                 if (p === 37445) return 'Intel Inc.';
                 if (p === 37446) return 'Intel Iris OpenGL Engine';
                 return origGetParam.call(this, p);
             };
+
+            // --- Notification / permissions query ---
             const origQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (params) => (
                 params.name === 'notifications'
                     ? Promise.resolve({ state: Notification.permission })
                     : origQuery(params)
             );
+
+            // --- Canvas fingerprint noise (shared helper) ---
+            const _addCanvasNoise = (imageData) => {
+                const d = imageData.data;
+                for (let i = 0; i < d.length; i += 4) {
+                    d[i]   = Math.max(0, Math.min(255, d[i]   + (Math.random() * 2 - 1)));
+                    d[i+1] = Math.max(0, Math.min(255, d[i+1] + (Math.random() * 2 - 1)));
+                    d[i+2] = Math.max(0, Math.min(255, d[i+2] + (Math.random() * 2 - 1)));
+                }
+            };
+            const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
+                const ctx = this.getContext('2d');
+                if (ctx && this.width > 0 && this.height > 0) {
+                    const imageData = ctx.getImageData(0, 0, this.width, this.height);
+                    _addCanvasNoise(imageData);
+                    ctx.putImageData(imageData, 0, 0);
+                }
+                return _toDataURL.call(this, type, quality);
+            };
+            const _toBlob = HTMLCanvasElement.prototype.toBlob;
+            HTMLCanvasElement.prototype.toBlob = function(callback, type, quality) {
+                const ctx = this.getContext('2d');
+                if (ctx && this.width > 0 && this.height > 0) {
+                    const imageData = ctx.getImageData(0, 0, this.width, this.height);
+                    _addCanvasNoise(imageData);
+                    ctx.putImageData(imageData, 0, 0);
+                }
+                return _toBlob.call(this, callback, type, quality);
+            };
+            const _getImageData = CanvasRenderingContext2D.prototype.getImageData;
+            CanvasRenderingContext2D.prototype.getImageData = function(sx, sy, sw, sh) {
+                const imageData = _getImageData.call(this, sx, sy, sw, sh);
+                _addCanvasNoise(imageData);
+                return imageData;
+            };
+
+            // --- Audio fingerprint noise ---
+            const _getChannelData = AudioBuffer.prototype.getChannelData;
+            AudioBuffer.prototype.getChannelData = function(channel) {
+                const data = _getChannelData.call(this, channel);
+                for (let i = 0; i < data.length; i++) {
+                    data[i] += (Math.random() * 0.0002 - 0.0001);
+                }
+                return data;
+            };
+
+            // --- navigator.connection realistic values (slightly randomized) ---
+            try {
+                if (navigator.connection) {
+                    const _rtt      = [25, 50, 75][Math.floor(Math.random() * 3)];
+                    const _downlink = +(7 + Math.random() * 6).toFixed(1);
+                    Object.defineProperties(navigator.connection, {
+                        rtt:           { get: () => _rtt,      configurable: true },
+                        downlink:      { get: () => _downlink, configurable: true },
+                        effectiveType: { get: () => '4g',      configurable: true },
+                        saveData:      { get: () => false,     configurable: true },
+                    });
+                }
+            } catch(e) {}
         """)
