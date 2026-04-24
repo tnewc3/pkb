@@ -8,28 +8,48 @@ import os
 import sys
 import subprocess
 import shutil
-import winreg
 from pathlib import Path
+import powershell
 
 APP_NAME    = "Pokemon Card Bot"
 APP_VERSION = "1.0.0"
-ICON_URL    = None  # We'll generate one
 
-# Where the bot lives after install
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA")) / "PokemonCardBot"
 VENV_DIR    = INSTALL_DIR / "venv"
 LAUNCH_BAT  = INSTALL_DIR / "launch.bat"
-DESKTOP     = Path(os.environ.get("USERPROFILE")) / "Desktop"
-SHORTCUT    = DESKTOP / "Pokemon Card Bot.lnk"
 
+def get_desktop() -> Path:
+    """Get the real Desktop path even on OneDrive-redirected machines."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-command", "[Environment]::GetFolderPath('Desktop')"],
+            capture_output=True, text=True
+        )
+        desktop = result.stdout.strip()
+        if desktop and Path(desktop).exists():
+            return Path(desktop)
+    except:
+        pass
+    # Fallbacks
+    for candidate in [
+        Path(os.environ.get("USERPROFILE", "")) / "Desktop",
+        Path(os.environ.get("USERPROFILE", "")) / "OneDrive" / "Desktop",
+        Path("C:/Users/thomasadmin/Desktop"),
+    ]:
+        if candidate.exists():
+            return candidate
+    # Last resort — create it
+    fallback = Path(os.environ.get("USERPROFILE", "C:/Users/Public")) / "Desktop"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 PACKAGES = [
-    "playwright==1.43.0",
+    "playwright",
     "requests==2.31.0",
     "plyer==2.1.0",
     "python-dotenv==1.0.1",
     "beautifulsoup4==4.12.3",
-    "swiftshadow==2.3.4",
+    "swiftshadow==2.4.0",
 ]
 
 BOT_FILES = [
@@ -55,25 +75,29 @@ BOT_FILES = [
 
 class Installer:
     def __init__(self):
-        self.errors = []
+        self.errors  = []
+        self.desktop = get_desktop()
+        self.shortcut = self.desktop / "Pokemon Card Bot.bat"
 
     def run(self):
         print("=" * 55)
         print(f"  {APP_NAME} v{APP_VERSION} — Installer")
         print("=" * 55)
         print()
+        print(f"   Desktop detected: {self.desktop}")
+        print()
 
         steps = [
-            ("Checking Python version",    self._check_python),
-            ("Creating install directory", self._create_install_dir),
-            ("Copying bot files",          self._copy_files),
+            ("Checking Python version",      self._check_python),
+            ("Creating install directory",   self._create_install_dir),
+            ("Copying bot files",            self._copy_files),
             ("Creating virtual environment", self._create_venv),
-            ("Installing dependencies",    self._install_deps),
+            ("Installing dependencies",      self._install_deps),
             ("Installing Playwright browsers", self._install_browsers),
-            ("Creating .env file",         self._create_env),
-            ("Creating launcher",          self._create_launcher),
-            ("Creating desktop shortcut",  self._create_shortcut),
-            ("Creating uninstaller",       self._create_uninstaller),
+            ("Creating .env file",           self._create_env),
+            ("Creating launcher",            self._create_launcher),
+            ("Creating desktop shortcut",    self._create_shortcut),
+            ("Creating uninstaller",         self._create_uninstaller),
         ]
 
         for label, fn in steps:
@@ -89,7 +113,7 @@ class Installer:
 
         print()
         print(f"📁 Installed to: {INSTALL_DIR}")
-        print(f"🖥️  Desktop shortcut: {SHORTCUT}")
+        print(f"🖥️  Desktop shortcut: {self.shortcut}")
         print()
         print("Double-click  'Pokemon Card Bot'  on your desktop to launch.")
         print()
@@ -99,7 +123,7 @@ class Installer:
 
     def _check_python(self):
         v = sys.version_info
-        if v.major < 3 or v.minor < 11:
+        if v.major < 3 or (v.major == 3 and v.minor < 11):
             raise RuntimeError(
                 f"Python 3.11+ required. You have {v.major}.{v.minor}. "
                 f"Download from python.org"
@@ -111,8 +135,8 @@ class Installer:
         print(f"   {INSTALL_DIR}")
 
     def _copy_files(self):
-        src = Path(__file__).parent.parent  # project root
-        copied = 0
+        src     = Path(__file__).parent.parent  # project root
+        copied  = 0
         missing = []
 
         for fname in BOT_FILES:
@@ -143,21 +167,31 @@ class Installer:
         print("   Installing packages (this may take a minute)...")
         for pkg in PACKAGES:
             print(f"   → {pkg}")
-            subprocess.run(
+            result = subprocess.run(
                 [str(pip), "install", pkg, "--quiet"],
-                check=True, capture_output=True
+                capture_output=True, text=True
             )
+            if result.returncode != 0:
+                # Show actual error for debugging
+                print(f"   ⚠️  {pkg} warning: {result.stderr[-200:].strip()}")
         print("   All packages installed ✅")
 
     def _install_browsers(self):
         pw_exe = VENV_DIR / "Scripts" / "playwright.exe"
+        if not pw_exe.exists():
+            self.errors.append(
+                "playwright.exe not found in venv — "
+                "run: venv\\Scripts\\playwright install chromium"
+            )
+            return
         print("   Downloading Chromium (~120MB)...")
         result = subprocess.run(
             [str(pw_exe), "install", "chromium"],
             capture_output=True, text=True
         )
         if result.returncode != 0:
-            self.errors.append(f"Playwright browser install: {result.stderr[:100]}")
+            self.errors.append(
+                f"Playwright browser install: {result.stderr[:100]}")
         else:
             print("   Chromium installed ✅")
 
@@ -198,8 +232,6 @@ class Installer:
             f"\"{python_exe}\" pokemon_bot_gui.py\n"
             f"if %errorlevel% neq 0 pause\n"
         )
-
-        # Also create a VBScript launcher that hides the console window
         vbs = INSTALL_DIR / "launch_silent.vbs"
         vbs.write_text(
             f'Set WshShell = CreateObject("WScript.Shell")\n'
@@ -209,36 +241,15 @@ class Installer:
         print(f"   Created launcher: {LAUNCH_BAT}")
 
     def _create_shortcut(self):
-        try:
-            import winshell
-            from win32com.client import Dispatch
-
-            shell    = Dispatch("WScript.Shell")
-            shortcut = shell.CreateShortCut(str(SHORTCUT))
-            shortcut.TargetPath  = str(INSTALL_DIR / "launch_silent.vbs")
-            shortcut.WorkingDirectory = str(INSTALL_DIR)
-            shortcut.Description = APP_NAME
-
-            # Use Python icon if no custom icon
-            icon_path = INSTALL_DIR / "icon.ico"
-            if icon_path.exists():
-                shortcut.IconLocation = str(icon_path)
-
-            shortcut.save()
-            print(f"   Shortcut created: {SHORTCUT}")
-        except ImportError:
-            # Fallback — create a .bat shortcut on desktop
-            bat = DESKTOP / "Pokemon Card Bot.bat"
-            bat.write_text(
-                f"@echo off\n"
-                f"cd /d \"{INSTALL_DIR}\"\n"
-                f"\"{VENV_DIR / 'Scripts' / 'python.exe'}\" pokemon_bot_gui.py\n"
-            )
-            print(f"   Created .bat shortcut: {bat}")
-            self.errors.append(
-                "pywin32 not installed — created .bat shortcut instead of .lnk. "
-                "For a proper shortcut: pip install pywin32 winshell"
-            )
+        python_exe = VENV_DIR / "Scripts" / "python.exe"
+        bat_content = (
+            f"@echo off\n"
+            f"cd /d \"{INSTALL_DIR}\"\n"
+            f"\"{python_exe}\" pokemon_bot_gui.py\n"
+            f"if %errorlevel% neq 0 pause\n"
+        )
+        self.shortcut.write_text(bat_content)
+        print(f"   Created shortcut: {self.shortcut}")
 
     def _create_uninstaller(self):
         uninstall = INSTALL_DIR / "uninstall.py"
@@ -246,7 +257,7 @@ class Installer:
             "import shutil, os\n"
             "from pathlib import Path\n\n"
             f"INSTALL_DIR = Path(r'{INSTALL_DIR}')\n"
-            f"SHORTCUT    = Path(r'{SHORTCUT}')\n\n"
+            f"SHORTCUT    = Path(r'{self.shortcut}')\n\n"
             "confirm = input('Uninstall Pokemon Card Bot? (y/n): ')\n"
             "if confirm.lower() == 'y':\n"
             "    if SHORTCUT.exists():\n"
@@ -255,8 +266,8 @@ class Installer:
             "    print('Uninstalled.')\n"
             "else:\n"
             "    print('Cancelled.')\n"
-        )
-        print(f"   Created uninstaller")
+        ")
+        print("   Created uninstaller")
 
     # ── HELPERS ──────────────────────────────
 
