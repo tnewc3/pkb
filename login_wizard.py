@@ -4,8 +4,11 @@ import threading
 import json
 import os
 import re
+import random
+import time
 from playwright.sync_api import Page
 from playwright_manager import PlaywrightManager
+from stealth_setup import human_type, human_delay
 
 SESSION_FILE = "sessions.json"
 
@@ -155,7 +158,8 @@ class LoginWizard(tk.Toplevel):
                         pass
 
                     page.wait_for_selector("#username", timeout=15000)
-                    page.fill("#username", email)
+                    time.sleep(random.uniform(0.8, 1.5))
+                    human_type(page, "#username", email)
                     try:
                         page.click("button[type='submit']", timeout=5000)
                     except:
@@ -187,7 +191,9 @@ class LoginWizard(tk.Toplevel):
                         pass
 
                     page.wait_for_selector("#password", timeout=10000)
-                    page.fill("#password", password)
+                    time.sleep(random.uniform(0.5, 1.0))
+                    human_type(page, "#password", password)
+                    time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
                     # Wait for redirect away from signin/login page
@@ -204,9 +210,20 @@ class LoginWizard(tk.Toplevel):
                 elif retailer == "walmart":
                     page.goto("https://www.walmart.com/account/login",
                               wait_until="domcontentloaded", timeout=20000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                    except:
+                        pass
+                    page.mouse.move(
+                        random.randint(200, 800),
+                        random.randint(200, 600),
+                        steps=random.randint(15, 30)
+                    )
                     page.wait_for_selector("#email", timeout=15000)
-                    page.fill("#email", email)
-                    page.fill("#password", password)
+                    time.sleep(random.uniform(1.2, 2.5))
+                    human_type(page, "#email", email)
+                    human_type(page, "#password", password)
+                    time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
                     # Wait for redirect away from login page
