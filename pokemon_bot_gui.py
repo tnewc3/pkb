@@ -255,7 +255,7 @@ class PokemonBotGUI:
         tk.Label(cbar, text="Cart Total:",
                  font=("Helvetica", 10, "bold"),
                  fg="white", bg="#0f3460").pack(side="left", padx=15)
-        self.cart_total_lbl = tk.Label(cbar, text="$0.00",
+        self.cart_total_lbl = tk.Label(cbar, text="${:.2f} ".format(self.cart.local_total()),
                                        font=("Helvetica", 13, "bold"),
                                        fg="#f5a623", bg="#0f3460")
         self.cart_total_lbl.pack(side="left")
@@ -575,13 +575,15 @@ class PokemonBotGUI:
         self.cart_count_lbl.config(text=f"({self.cart.count()} items)")
 
     def _set_status(self, msg: str):
-        self.root.after(0, lambda: self.status_lbl.config(text=msg))
+        if hasattr(self, "status_lbl"):
+            self.root.after(0, lambda: self.status_lbl.config(text=msg))
 
     def _log(self, msg: str):
-        self.root.after(0, lambda: (
-            self.log_box.insert("end", msg + "\n"),
-            self.log_box.see("end")
-        ))
+        if hasattr(self, "log_box"):
+            self.root.after(0, lambda: (
+                self.log_box.insert("end", msg + "\n"),
+                self.log_box.see("end")
+            ))
 
 if __name__ == "__main__":
     root = tk.Tk()
