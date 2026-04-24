@@ -9,7 +9,6 @@ import sys
 import subprocess
 import shutil
 from pathlib import Path
-import powershell
 
 APP_NAME    = "Pokemon Card Bot"
 APP_VERSION = "1.0.0"
@@ -181,7 +180,7 @@ class Installer:
         if not pw_exe.exists():
             self.errors.append(
                 "playwright.exe not found in venv — "
-                "run: venv\\Scripts\\playwright install chromium"
+                "run: venv\Scripts\playwright install chromium"
             )
             return
         print("   Downloading Chromium (~120MB)...")
@@ -229,7 +228,7 @@ class Installer:
         LAUNCH_BAT.write_text(
             f"@echo off\n"
             f"cd /d \"{INSTALL_DIR}\"\n"
-            f"\"{python_exe}\" pokemon_bot_gui.py\n"
+            f'"{python_exe}" pokemon_bot_gui.py\n'
             f"if %errorlevel% neq 0 pause\n"
         )
         vbs = INSTALL_DIR / "launch_silent.vbs"
@@ -245,7 +244,7 @@ class Installer:
         bat_content = (
             f"@echo off\n"
             f"cd /d \"{INSTALL_DIR}\"\n"
-            f"\"{python_exe}\" pokemon_bot_gui.py\n"
+            f'"{python_exe}" pokemon_bot_gui.py\n'
             f"if %errorlevel% neq 0 pause\n"
         )
         self.shortcut.write_text(bat_content)
