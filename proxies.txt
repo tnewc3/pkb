@@ -1,0 +1,3 @@
+# One proxy per line — bot rotates through these automatically
+# Format: http://user:password@host:port
+# Leave empty to use free proxies via swiftshadow

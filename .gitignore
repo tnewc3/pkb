@@ -1,0 +1,5 @@
+sessions.json
+products.json
+.env
+__pycache__/
+*.pyc
