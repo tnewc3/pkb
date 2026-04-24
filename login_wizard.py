@@ -3,6 +3,7 @@ from tkinter import messagebox
 import threading
 import json
 import os
+import re
 from playwright.sync_api import Page
 from playwright_manager import PlaywrightManager
 
@@ -160,20 +161,21 @@ class LoginWizard(tk.Toplevel):
                     except:
                         pass
 
+                    # Dismiss passkey prompt if shown
                     try:
                         page.wait_for_selector(
-                            "button[data-test='passkey-cancel-button'],\n"
-                            "a[data-test='use-password-link'],\n"
-                            "button:has-text('Use password'),\n"
-                            "button:has-text('Sign in with a password'),\n"
+                            "button[data-test='passkey-cancel-button'],"
+                            "a[data-test='use-password-link'],"
+                            "button:has-text('Use password'),"
+                            "button:has-text('Sign in with a password'),"
                             "[data-test='passkeys-cancel']",
                             timeout=5000
                         )
                         for sel in [
                             "button[data-test='passkey-cancel-button']",
                             "a[data-test='use-password-link']",
-                            "button:has-text('Use password')",
-                            "button:has-text('Sign in with a password')",
+                            "button:has-text('Use password'),"
+                            "button:has-text('Sign in with a password'),"
                             "[data-test='passkeys-cancel']",
                         ]:
                             try:
@@ -187,10 +189,17 @@ class LoginWizard(tk.Toplevel):
                     page.wait_for_selector("#password", timeout=10000)
                     page.fill("#password", password)
                     page.click("button[type='submit']")
-                    page.wait_for_selector(
-                        "[data-test='accountNav-greeting']",
-                        timeout=15000)
-                    return True
+
+                    # Wait for redirect away from signin/login page
+                    try:
+                        page.wait_for_url(
+                            re.compile(r"(?!.*(/signin|/login)).*target\\.com.*"),
+                            timeout=20000
+                        )
+                    except:
+                        pass
+                    url = page.url.lower()
+                    return "target.com" in url and "signin" not in url and "login" not in url
 
                 elif retailer == "walmart":
                     page.goto("https://www.walmart.com/account/login",
@@ -199,11 +208,18 @@ class LoginWizard(tk.Toplevel):
                     page.fill("#email", email)
                     page.fill("#password", password)
                     page.click("button[type='submit']")
-                    page.wait_for_selector(
-                        ".account-menu__user-info,\n"
-                        "[data-automation-id='user-name']",
-                        timeout=15000)
-                    return True
+
+                    # Wait for redirect away from login page
+                    try:
+                        page.wait_for_url(
+                            re.compile(r"(?!.*(/account/login)).*walmart\\.com.*"),
+                            timeout=20000
+                        )
+                    except:
+                        pass
+                    url = page.url.lower()
+                    return "walmart.com" in url and "/account/login" not in url
+
             except:
                 return False
 
