@@ -171,7 +171,6 @@ class Installer:
                 capture_output=True, text=True
             )
             if result.returncode != 0:
-                # Show actual error for debugging
                 print(f"   ⚠️  {pkg} warning: {result.stderr[-200:].strip()}")
         print("   All packages installed ✅")
 
@@ -200,7 +199,7 @@ class Installer:
             print("   .env already exists — skipping.")
             return
         env_file.write_text(
-            "# Pokémon Card Bot Settings\n\n"
+            "# Pokemon Card Bot Settings\n\n"
             "TARGET_EMAIL=\n"
             "TARGET_PASSWORD=\n"
             "WALMART_EMAIL=\n"
@@ -219,7 +218,8 @@ class Installer:
             "PROXY_FILE=proxies.txt\n"
             "USE_FREE_PROXIES=true\n\n"
             "HEADLESS=false\n"
-            "MAX_ITEMS_PER_CATEGORY=10\n"
+            "MAX_ITEMS_PER_CATEGORY=10\n",
+            encoding='utf-8'
         )
         print(f"   Created {env_file}")
 
@@ -273,7 +273,7 @@ class Installer:
     def _step(self, label: str, fn):
         print(f"▶  {label}...")
         try:
-            fn()
+            fn() 
         except Exception as e:
             print(f"   ❌ Failed: {e}")
             self.errors.append(f"{label}: {e}")
