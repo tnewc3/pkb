@@ -1,0 +1,9 @@
+# Proxy settings
+# Option A: single proxy
+PROXY_URL=
+
+# Option B: your own list (one per line)
+PROXY_FILE=proxies.txt
+
+# Option C: auto-fetch free proxies (swiftshadow)
+USE_FREE_PROXIES=true
