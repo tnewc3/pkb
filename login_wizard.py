@@ -16,13 +16,13 @@ class LoginWizard(tk.Toplevel):
         super().__init__(parent)
         self.pw          = pw
         self.on_complete = on_complete
-        self.title("🎴 Pokémon Bot — Setup")
+        self.title("Pokemon Bot - Setup")
         self.geometry("620x520")
         self.resizable(False, False)
         self.configure(bg="#1a1a2e")
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._step     = 0
+        self._step       = 0
         self._target_ok  = False
         self._walmart_ok = False
         self._container  = tk.Frame(self, bg="#1a1a2e")
@@ -33,10 +33,10 @@ class LoginWizard(tk.Toplevel):
         for w in self._container.winfo_children():
             w.destroy()
         step = self.STEPS[self._step]
-        if step == "welcome": self._build_welcome()
-        elif step == "target":  self._build_login("target")
-        elif step == "walmart": self._build_login("walmart")
-        elif step == "done":    self._build_done()
+        if step == "welcome":  self._build_welcome()
+        elif step == "target":   self._build_login("target")
+        elif step == "walmart":  self._build_login("walmart")
+        elif step == "done":     self._build_done()
 
     def _next(self):
         self._step += 1
@@ -46,38 +46,33 @@ class LoginWizard(tk.Toplevel):
         self._step = self.STEPS.index("done")
         self._show_step()
 
-    # ── WELCOME ──────────────────────────────
-
     def _build_welcome(self):
-        self._title("👋 Welcome to Pokémon Card Bot")
+        self._title("Welcome to Pokemon Card Bot")
         self._spacer(10)
         self._label(
             "This wizard logs you into Target and Walmart so the bot\n"
             "can monitor stock and add items to your cart automatically.\n\n"
             "Your session is saved locally in  sessions.json  and is\n"
             "never uploaded anywhere.\n\n"
-            "You only need to do this once — sessions are reused on\n"
+            "You only need to do this once -- sessions are reused on\n"
             "every future launch until they expire."
         )
         self._spacer(20)
         self._progress(0)
         self._spacer(20)
-        self._btn("▶  Begin Setup", self._next, "#4ade80")
+        self._btn("Begin Setup", self._next, "#4ade80")
         if os.path.exists(SESSION_FILE):
             self._spacer(6)
             tk.Label(self._container,
-                     text="✅ Saved session found — you can skip setup.",
+                     text="Saved session found -- you can skip setup.",
                      font=("Helvetica", 9), fg="#4ade80", bg="#1a1a2e"
                      ).pack()
-            self._btn("⏩  Skip (use saved session)",
-                      self._jump_done, "#0f3460")
-
-    # ── RETAILER LOGIN ────────────────────────
+            self._btn("Skip (use saved session)", self._jump_done, "#0f3460")
 
     def _build_login(self, retailer: str):
         is_target = retailer == "target"
         color     = "#e94560" if is_target else "#0071ce"
-        logo      = "🎯 Target" if is_target else "🛒 Walmart"
+        logo      = "Target" if is_target else "Walmart"
         pct       = 33 if is_target else 66
 
         self._title(f"Sign in to {logo}")
@@ -104,7 +99,7 @@ class LoginWizard(tk.Toplevel):
                  bg="#1a1a2e", anchor="w").pack(fill="x")
         pass_var = tk.StringVar()
         pass_ent = tk.Entry(self._container, textvariable=pass_var,
-                            show="●", font=("Helvetica", 11),
+                            show="*", font=("Helvetica", 11),
                             bg="#16213e", fg="white",
                             insertbackground="white", relief="flat",
                             highlightthickness=1, highlightcolor=color)
@@ -121,9 +116,9 @@ class LoginWizard(tk.Toplevel):
         def _do():
             e, p = email_var.get().strip(), pass_var.get().strip()
             if not e or not p:
-                status_var.set("⚠️  Enter both email and password.")
+                status_var.set("Enter both email and password.")
                 return
-            status_var.set("⏳ Logging in…")
+            status_var.set("Logging in...")
             self.update_idletasks()
             threading.Thread(
                 target=self._attempt_login,
@@ -131,12 +126,12 @@ class LoginWizard(tk.Toplevel):
                 daemon=True
             ).start()
 
-        tk.Button(btn_row, text=f"🔐  Login to {logo}",
+        tk.Button(btn_row, text=f"Login to {logo}",
                   command=_do, bg=color, fg="white",
                   font=("Helvetica", 10, "bold"),
                   relief="flat", padx=14, pady=8
                   ).pack(side="left", padx=(0, 8))
-        tk.Button(btn_row, text="⏩  Skip",
+        tk.Button(btn_row, text="Skip",
                   command=self._next,
                   bg="#3b3b6b", fg="#ccc",
                   font=("Helvetica", 9),
@@ -157,14 +152,49 @@ class LoginWizard(tk.Toplevel):
                             timeout=5000)
                     except:
                         pass
+
+                    # Fill email and click Continue
                     page.wait_for_selector("#username", timeout=15000)
                     page.fill("#username", email)
+                    try:
+                        page.click("button[type='submit']", timeout=5000)
+                    except:
+                        pass
+
+                    # Target may show a passkey prompt -- dismiss it and use password instead
+                    try:
+                        page.wait_for_selector(
+                            "button[data-test='passkey-cancel-button'],\n"
+                            "a[data-test='use-password-link'],\n"
+                            "button:has-text('Use password'),\n"
+                            "button:has-text('Sign in with a password'),\n"
+                            "[data-test='passkeys-cancel']",
+                            timeout=5000
+                        )
+                        for sel in [
+                            "button[data-test='passkey-cancel-button']",
+                            "a[data-test='use-password-link']",
+                            "button:has-text('Use password')",
+                            "button:has-text('Sign in with a password')",
+                            "[data-test='passkeys-cancel']",
+                        ]:
+                            try:
+                                page.click(sel, timeout=2000)
+                                break
+                            except:
+                                continue
+                    except:
+                        pass  # No passkey prompt shown
+
+                    # Fill password and submit
+                    page.wait_for_selector("#password", timeout=10000)
                     page.fill("#password", password)
                     page.click("button[type='submit']")
                     page.wait_for_selector(
                         "[data-test='accountNav-greeting']",
                         timeout=15000)
                     return True
+
                 elif retailer == "walmart":
                     page.goto("https://www.walmart.com/account/login",
                               wait_until="domcontentloaded", timeout=20000)
@@ -173,7 +203,7 @@ class LoginWizard(tk.Toplevel):
                     page.fill("#password", password)
                     page.click("button[type='submit']")
                     page.wait_for_selector(
-                        ".account-menu__user-info,"
+                        ".account-menu__user-info,\n"
                         "[data-automation-id='user-name']",
                         timeout=15000)
                     return True
@@ -188,42 +218,38 @@ class LoginWizard(tk.Toplevel):
                 else:
                     self._walmart_ok = True
                 self.pw.save_session()
-                self.after(0, lambda: status_var.set("✅ Login successful!"))
+                self.after(0, lambda: status_var.set("Login successful!"))
                 self.after(800, self._next)
             else:
                 self.after(0, lambda: status_var.set(
-                    "❌ Login failed — check credentials."))
+                    "Login failed -- check credentials or try again."))
         except Exception as e:
-            self.after(0, lambda: status_var.set(f"❌ Error: {str(e)[:60]}"))
-
-    # ── DONE ─────────────────────────────────
+            self.after(0, lambda: status_var.set(f"Error: {str(e)[:60]}}"))
 
     def _build_done(self):
-        self._title("✅ Setup Complete!")
+        self._title("Setup Complete!")
         self._spacer(10)
         self._progress(100)
         self._spacer(20)
         lines = []
-        lines.append("✅  Target — logged in" if self._target_ok
-                     else "⏩  Target — skipped")
-        lines.append("✅  Walmart — logged in" if self._walmart_ok
-                     else "⏩  Walmart — skipped")
+        lines.append("Target -- logged in" if self._target_ok
+                     else "Target -- skipped")
+        lines.append("Walmart -- logged in" if self._walmart_ok
+                     else "Walmart -- skipped")
         if os.path.exists(SESSION_FILE) and \
                 not (self._target_ok or self._walmart_ok):
-            lines.append("\n✅  Using previously saved session.")
+            lines.append("\nUsing previously saved session.")
         lines.append(
-            "\n\nPress  🚀 Launch Bot  to open the main window.\n"
-            "Click  ▶ Start  when ready to begin monitoring."
+            "\n\nPress Launch Bot to open the main window.\n"
+            "Click Start when ready to begin monitoring."
         )
         self._label("\n".join(lines))
         self._spacer(24)
-        self._btn("🚀  Launch Bot", self._finish, "#4ade80")
+        self._btn("Launch Bot", self._finish, "#4ade80")
 
     def _finish(self):
         self.destroy()
         self.on_complete()
-
-    # ── HELPERS ──────────────────────────────
 
     def _title(self, text):
         tk.Label(self._container, text=text,
