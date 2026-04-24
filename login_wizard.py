@@ -178,8 +178,8 @@ class LoginWizard(tk.Toplevel):
                         for sel in [
                             "button[data-test='passkey-cancel-button']",
                             "a[data-test='use-password-link']",
-                            "button:has-text('Use password'),"
-                            "button:has-text('Sign in with a password'),"
+                            "button:has-text('Use password')",
+                            "button:has-text('Sign in with a password')",
                             "[data-test='passkeys-cancel']",
                         ]:
                             try:
@@ -196,10 +196,9 @@ class LoginWizard(tk.Toplevel):
                     time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
-                    # Wait for redirect away from signin/login page
                     try:
                         page.wait_for_url(
-                            re.compile(r"(?!.*(/signin|/login)).*target\\.com.*"),
+                            re.compile(r"(?!.*(/signin|/login)).*target\.com.*"),
                             timeout=20000
                         )
                     except:
@@ -226,10 +225,9 @@ class LoginWizard(tk.Toplevel):
                     time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
-                    # Wait for redirect away from login page
                     try:
                         page.wait_for_url(
-                            re.compile(r"(?!.*(/account/login)).*walmart\\.com.*"),
+                            re.compile(r"(?!.*(/account/login)).*walmart\.com.*"),
                             timeout=20000
                         )
                     except:
@@ -254,7 +252,8 @@ class LoginWizard(tk.Toplevel):
                 self.after(0, lambda: status_var.set(
                     "Login failed -- check credentials or try again."))
         except Exception as e:
-            self.after(0, lambda: status_var.set(f"Error: {str(e)[:60]}"))
+            _msg = str(e)[:60]
+            self.after(0, lambda: status_var.set(f"Error: {_msg}"))
 
     def _build_done(self):
         self._title("Setup Complete!")
