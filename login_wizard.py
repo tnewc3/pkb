@@ -153,7 +153,6 @@ class LoginWizard(tk.Toplevel):
                     except:
                         pass
 
-                    # Fill email and click Continue
                     page.wait_for_selector("#username", timeout=15000)
                     page.fill("#username", email)
                     try:
@@ -161,7 +160,6 @@ class LoginWizard(tk.Toplevel):
                     except:
                         pass
 
-                    # Target may show a passkey prompt -- dismiss it and use password instead
                     try:
                         page.wait_for_selector(
                             "button[data-test='passkey-cancel-button'],\n"
@@ -184,9 +182,8 @@ class LoginWizard(tk.Toplevel):
                             except:
                                 continue
                     except:
-                        pass  # No passkey prompt shown
+                        pass
 
-                    # Fill password and submit
                     page.wait_for_selector("#password", timeout=10000)
                     page.fill("#password", password)
                     page.click("button[type='submit']")
@@ -224,7 +221,7 @@ class LoginWizard(tk.Toplevel):
                 self.after(0, lambda: status_var.set(
                     "Login failed -- check credentials or try again."))
         except Exception as e:
-            self.after(0, lambda: status_var.set(f"Error: {str(e)[:60]}}"))
+            self.after(0, lambda: status_var.set(f"Error: {str(e)[:60]}"))
 
     def _build_done(self):
         self._title("Setup Complete!")
