@@ -6,6 +6,7 @@ import os
 import re
 import random
 import time
+import urllib.parse
 from playwright.sync_api import Page
 from playwright_manager import PlaywrightManager
 from stealth_setup import human_type, human_click, human_delay
@@ -226,7 +227,7 @@ class LoginWizard(tk.Toplevel):
 
                 elif retailer == "walmart":
                     # ---- helper: detect DataDome / generic captcha ----
-                    def _captcha_present(p):
+                    def _captcha_present(page):
                         for sel in [
                             "iframe[src*='datadome']",
                             "iframe[src*='captcha']",
@@ -236,13 +237,13 @@ class LoginWizard(tk.Toplevel):
                             "iframe[title*='CAPTCHA']",
                         ]:
                             try:
-                                el = p.query_selector(sel)
+                                el = page.query_selector(sel)
                                 if el and el.is_visible():
                                     return True
                             except Exception:
                                 pass
-                        url = p.url.lower()
-                        return "captcha" in url or "datadome" in url
+                        raw_url = page.url.lower()
+                        return "captcha" in raw_url or "datadome" in raw_url
 
                     # Bug 1 fix: include input[name='userName'] and use state=visible
                     email_sel = (
@@ -327,11 +328,14 @@ class LoginWizard(tk.Toplevel):
                                 )
                             except Exception:
                                 pass
-                            url = login_page.url.lower()
+                            url = login_page.url
+                            parsed = urllib.parse.urlparse(url)
+                            host = parsed.netloc.lower()
+                            path = parsed.path.lower()
                             return (
-                                "walmart.com" in url
-                                and "/account/login" not in url
-                                and "identity.walmart.com" not in url
+                                host.endswith("walmart.com")
+                                and host != "identity.walmart.com"
+                                and "/account/login" not in path
                             )
 
                         except Exception as attempt_err:
@@ -401,7 +405,15 @@ class LoginWizard(tk.Toplevel):
         self._captcha_btn = None
 
     def _wait_for_captcha_solve(self, status_var, timeout=300):
-        """Block the login thread until the user signals CAPTCHA is solved."""
+        """Block the login thread until the user signals CAPTCHA is solved.
+
+        Args:
+            status_var: tkinter StringVar used to display status messages.
+            timeout: Maximum seconds to wait (default: 300).
+
+        Returns:
+            True if the user clicked Resume within the timeout, False otherwise.
+        """
         self._captcha_event.clear()
         self._show_captcha_resume_btn(status_var)
         return self._captcha_event.wait(timeout=timeout)
