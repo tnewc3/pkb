@@ -18,18 +18,20 @@ class LoginWizard(tk.Toplevel):
 
     def __init__(self, parent, pw: PlaywrightManager, on_complete):
         super().__init__(parent)
-        self.pw          = pw
-        self.on_complete = on_complete
+        self.pw              = pw
+        self.on_complete     = on_complete
         self.title("Pokemon Bot - Setup")
         self.geometry("620x520")
         self.resizable(False, False)
         self.configure(bg="#1a1a2e")
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._step       = 0
-        self._target_ok  = False
-        self._walmart_ok = False
-        self._container  = tk.Frame(self, bg="#1a1a2e")
+        self._step           = 0
+        self._target_ok      = False
+        self._walmart_ok     = False
+        self._captcha_event  = threading.Event()
+        self._captcha_btn    = None
+        self._container      = tk.Frame(self, bg="#1a1a2e")
         self._container.pack(fill="both", expand=True, padx=30, pady=20)
         self._show_step()
 
@@ -223,76 +225,121 @@ class LoginWizard(tk.Toplevel):
                     return "target.com" in url and "signin" not in url and "login" not in url
 
                 elif retailer == "walmart":
-                    # Walmart redirects to identity.walmart.com (OIDC).
-                    # Navigate and wait for the redirect to settle fully.
-                    login_page.goto("https://www.walmart.com/account/login",
-                                    wait_until="domcontentloaded", timeout=20000)
-                    try:
-                        login_page.wait_for_load_state("networkidle", timeout=12000)
-                    except:
-                        pass
+                    # ---- helper: detect DataDome / generic captcha ----
+                    def _captcha_present(p):
+                        for sel in [
+                            "iframe[src*='datadome']",
+                            "iframe[src*='captcha']",
+                            "#captcha-holder",
+                            "#dd-captcha",
+                            "iframe[title*='DataDome']",
+                            "iframe[title*='CAPTCHA']",
+                        ]:
+                            try:
+                                el = p.query_selector(sel)
+                                if el and el.is_visible():
+                                    return True
+                            except Exception:
+                                pass
+                        url = p.url.lower()
+                        return "captcha" in url or "datadome" in url
 
-                    # Human-like mouse movement before interacting
-                    login_page.mouse.move(
-                        random.randint(200, 600),
-                        random.randint(150, 400),
-                        steps=random.randint(15, 30)
-                    )
-                    time.sleep(random.uniform(0.8, 1.5))
-
-                    # Step 1 — "Phone number or email" field on identity.walmart.com
-                    # Selector covers both the old #email and the new unlabelled input
+                    # Bug 1 fix: include input[name='userName'] and use state=visible
                     email_sel = (
                         "#email, "
                         "input[name='email'], "
+                        "input[name='userName'], "
                         "input[type='email'], "
                         "input[autocomplete='email'], "
                         "input[autocomplete='username']"
                     )
-                    login_page.wait_for_selector(email_sel, state="visible", timeout=15000)
-                    time.sleep(random.uniform(1.0, 2.0))
-                    human_type(login_page, email_sel, email)
-                    time.sleep(random.uniform(0.5, 1.0))
 
-                    # Click Continue / Next button
-                    for btn_sel in [
-                        "button[type='submit']",
-                        "button:has-text('Continue')",
-                        "button:has-text('Next')",
-                    ]:
+                    # Retry loop: initial attempt + up to 2 retries on timeout
+                    for attempt in range(3):
                         try:
-                            human_click(login_page, btn_sel)
-                            break
-                        except:
-                            continue
+                            login_page.goto(
+                                "https://www.walmart.com/account/login",
+                                wait_until="domcontentloaded", timeout=20000,
+                            )
+                            try:
+                                login_page.wait_for_load_state("networkidle", timeout=12000)
+                            except Exception:
+                                pass
 
-                    # Step 2 — password field (may be on same page or new page after Continue)
-                    login_page.wait_for_selector("input[type='password']",
-                                                 state="visible", timeout=15000)
-                    time.sleep(random.uniform(0.8, 1.5))
-                    human_type(login_page, "input[type='password']", password)
-                    time.sleep(random.uniform(0.4, 0.9))
+                            # CAPTCHA check after goto
+                            if _captcha_present(login_page):
+                                if not self._wait_for_captcha_solve(status_var):
+                                    return False
+                                # Reload login page after captcha solved
+                                login_page.goto(
+                                    "https://www.walmart.com/account/login",
+                                    wait_until="domcontentloaded", timeout=20000,
+                                )
+                                try:
+                                    login_page.wait_for_load_state("networkidle", timeout=12000)
+                                except Exception:
+                                    pass
 
-                    for btn_sel in [
-                        "button[type='submit']",
-                        "button:has-text('Sign in')",
-                        "button:has-text('Continue')",
-                    ]:
-                        try:
-                            human_click(login_page, btn_sel)
-                            break
-                        except:
-                            continue
+                            # Human-like mouse movement before interacting
+                            login_page.mouse.move(
+                                random.randint(200, 600),
+                                random.randint(150, 400),
+                                steps=random.randint(15, 30),
+                            )
+                            time.sleep(random.uniform(0.8, 1.5))
 
-                    try:
-                        login_page.wait_for_url(
-                            re.compile(r"walmart\.com(?!/account/login)"),
-                            timeout=20000
-                        )
-                    except:
-                        pass
-                    url = login_page.url.lower()
-                    return "walmart.com" in url and "/account/login" not in url and "identity.walmart.com" not in url
+                            # Step 1 — enter email / phone
+                            login_page.wait_for_selector(
+                                email_sel, state="visible", timeout=15000
+                            )
+                            if _captcha_present(login_page):
+                                if not self._wait_for_captcha_solve(status_var):
+                                    return False
+                                login_page.wait_for_selector(
+                                    email_sel, state="visible", timeout=15000
+                                )
+                            time.sleep(random.uniform(1.0, 2.0))
+                            human_type(login_page, email_sel, email)
+                            time.sleep(random.uniform(0.5, 1.0))
+
+                            # Click Continue to advance to the password page
+                            human_click(login_page, "button[type='submit']")
+                            time.sleep(random.uniform(0.8, 1.5))
+
+                            # Step 2 — enter password
+                            login_page.wait_for_selector(
+                                "input[type='password']", state="visible", timeout=15000
+                            )
+                            if _captcha_present(login_page):
+                                if not self._wait_for_captcha_solve(status_var):
+                                    return False
+                            time.sleep(random.uniform(0.8, 1.5))
+                            human_type(login_page, "input[type='password']", password)
+                            time.sleep(random.uniform(0.4, 0.9))
+
+                            # Submit sign-in
+                            human_click(login_page, "button[type='submit']")
+
+                            try:
+                                login_page.wait_for_url(
+                                    re.compile(r"walmart\.com(?!/account/login)"),
+                                    timeout=20000,
+                                )
+                            except Exception:
+                                pass
+                            url = login_page.url.lower()
+                            return (
+                                "walmart.com" in url
+                                and "/account/login" not in url
+                                and "identity.walmart.com" not in url
+                            )
+
+                        except Exception as attempt_err:
+                            print(f"[Login:walmart] attempt {attempt + 1} error: {attempt_err}")
+                            if attempt >= 2:
+                                raise
+                            time.sleep(2)
+                    return False
 
             except Exception as login_err:
                 print(f"[Login:{retailer}] error: {login_err}")
@@ -320,6 +367,46 @@ class LoginWizard(tk.Toplevel):
             _msg = str(e)[:60]
             self.after(0, lambda: status_var.set(f"Error: {_msg}"))
 
+    # ------------------------------------------------------------------ captcha
+    def _show_captcha_resume_btn(self, status_var):
+        """Show a 'Resume after CAPTCHA' button in the UI (called from bg thread)."""
+        def _ui():
+            status_var.set(
+                "⚠️  CAPTCHA detected — solve it in the browser, then click Resume."
+            )
+            try:
+                if self._captcha_btn and self._captcha_btn.winfo_exists():
+                    return
+            except Exception:
+                pass
+            self._captcha_btn = tk.Button(
+                self._container,
+                text="▶  Resume after CAPTCHA",
+                command=self._on_captcha_solved,
+                bg="#f59e0b", fg="#1a1a2e",
+                font=("Helvetica", 10, "bold"),
+                relief="flat", padx=14, pady=8,
+            )
+            self._captcha_btn.pack(pady=4)
+        self.after(0, _ui)
+
+    def _on_captcha_solved(self):
+        """Called when the user clicks the Resume button."""
+        self._captcha_event.set()
+        try:
+            if self._captcha_btn and self._captcha_btn.winfo_exists():
+                self._captcha_btn.destroy()
+        except Exception:
+            pass
+        self._captcha_btn = None
+
+    def _wait_for_captcha_solve(self, status_var, timeout=300):
+        """Block the login thread until the user signals CAPTCHA is solved."""
+        self._captcha_event.clear()
+        self._show_captcha_resume_btn(status_var)
+        return self._captcha_event.wait(timeout=timeout)
+
+    # ------------------------------------------------------------------ done
     def _build_done(self):
         self._title("Setup Complete!")
         self._spacer(10)
