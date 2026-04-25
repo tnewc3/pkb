@@ -151,12 +151,10 @@ class LoginWizard(tk.Toplevel):
             login_page = page.context.new_page()
             try:
                 if retailer == "target":
-                    login_page.goto("https://www.target.com/account",
+                    login_page.goto("https://www.target.com/account/login",
                                     wait_until="domcontentloaded", timeout=20000)
                     try:
-                        login_page.click(
-                            "button[data-test='accountNav-signIn']",
-                            timeout=5000)
+                        login_page.wait_for_load_state("networkidle", timeout=10000)
                     except:
                         pass
 
@@ -168,28 +166,43 @@ class LoginWizard(tk.Toplevel):
                     except:
                         pass
 
-                    # Dismiss passkey prompt if shown
+                    # After email submit — handle method picker OR direct password field
                     try:
+                        # Wait for either: password field directly, or the method-picker page
                         login_page.wait_for_selector(
-                            "button[data-test='passkey-cancel-button'],"
-                            "a[data-test='use-password-link'],"
-                            "button:has-text('Use password'),"
-                            "button:has-text('Sign in with a password'),"
+                            # Direct password field (skip picker)
+                            "input[type='password'], "
+                            # New 3-option method picker ("Enter your password")
+                            "button:has-text('Enter your password'), "
+                            "a:has-text('Enter your password'), "
+                            # Legacy passkey dismissal options
+                            "button[data-test='passkey-cancel-button'], "
+                            "a[data-test='use-password-link'], "
+                            "button:has-text('Use password'), "
+                            "button:has-text('Sign in with a password'), "
                             "[data-test='passkeys-cancel']",
-                            timeout=5000
+                            timeout=10000
                         )
-                        for sel in [
-                            "button[data-test='passkey-cancel-button']",
-                            "a[data-test='use-password-link']",
-                            "button:has-text('Use password')",
-                            "button:has-text('Sign in with a password')",
-                            "[data-test='passkeys-cancel']",
-                        ]:
-                            try:
-                                login_page.click(sel, timeout=2000)
-                                break
-                            except:
-                                continue
+                        # If the password field is NOT yet visible, click through the method picker
+                        if not login_page.is_visible("input[type='password']"):
+                            for sel in [
+                                # New method picker options (preferred)
+                                "button:has-text('Enter your password')",
+                                "a:has-text('Enter your password')",
+                                "[data-test='password-option']",
+                                "[data-test*='enter-password']",
+                                # Legacy passkey dismissal fallbacks
+                                "button[data-test='passkey-cancel-button']",
+                                "a[data-test='use-password-link']",
+                                "button:has-text('Use password')",
+                                "button:has-text('Sign in with a password')",
+                                "[data-test='passkeys-cancel']",
+                            ]:
+                                try:
+                                    login_page.click(sel, timeout=2000)
+                                    break
+                                except:
+                                    continue
                     except:
                         pass
 
