@@ -170,9 +170,12 @@ class LoginWizard(tk.Toplevel):
                     try:
                         # Wait for either: password field directly, or the method-picker page
                         login_page.wait_for_selector(
+                            # Direct password field (skip picker)
                             "input[type='password'], "
+                            # New 3-option method picker ("Enter your password")
                             "button:has-text('Enter your password'), "
                             "a:has-text('Enter your password'), "
+                            # Legacy passkey dismissal options
                             "button[data-test='passkey-cancel-button'], "
                             "a[data-test='use-password-link'], "
                             "button:has-text('Use password'), "
@@ -183,10 +186,12 @@ class LoginWizard(tk.Toplevel):
                         # If the password field is NOT yet visible, click through the method picker
                         if not login_page.is_visible("input[type='password']"):
                             for sel in [
+                                # New method picker options (preferred)
                                 "button:has-text('Enter your password')",
                                 "a:has-text('Enter your password')",
                                 "[data-test='password-option']",
                                 "[data-test*='enter-password']",
+                                # Legacy passkey dismissal fallbacks
                                 "button[data-test='passkey-cancel-button']",
                                 "a[data-test='use-password-link']",
                                 "button:has-text('Use password')",
