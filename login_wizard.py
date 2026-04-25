@@ -8,7 +8,7 @@ import random
 import time
 from playwright.sync_api import Page
 from playwright_manager import PlaywrightManager
-from stealth_setup import human_type, human_delay
+from stealth_setup import human_type, human_click, human_delay
 
 SESSION_FILE = "sessions.json"
 
@@ -164,7 +164,7 @@ class LoginWizard(tk.Toplevel):
                     time.sleep(random.uniform(0.8, 1.5))
                     human_type(login_page, "#username", email)
                     try:
-                        login_page.click("button[type='submit']", timeout=5000)
+                        human_click(login_page, "button[type='submit']")
                     except:
                         pass
 
@@ -181,7 +181,7 @@ class LoginWizard(tk.Toplevel):
                         for sel in [
                             "button[data-test='passkey-cancel-button']",
                             "a[data-test='use-password-link']",
-                            "button:has-text('Use password'),"
+                            "button:has-text('Use password')",
                             "button:has-text('Sign in with a password')",
                             "[data-test='passkeys-cancel']",
                         ]:
@@ -197,7 +197,7 @@ class LoginWizard(tk.Toplevel):
                     time.sleep(random.uniform(0.5, 1.0))
                     human_type(login_page, "input[type='password']", password)
                     time.sleep(random.uniform(0.4, 0.9))
-                    login_page.click("button[type='submit']")
+                    human_click(login_page, "button[type='submit']")
 
                     try:
                         login_page.wait_for_url(
@@ -248,7 +248,7 @@ class LoginWizard(tk.Toplevel):
                         "button:has-text('Next')",
                     ]:
                         try:
-                            login_page.click(btn_sel, timeout=3000)
+                            human_click(login_page, btn_sel)
                             break
                         except:
                             continue
@@ -266,7 +266,7 @@ class LoginWizard(tk.Toplevel):
                         "button:has-text('Continue')",
                     ]:
                         try:
-                            login_page.click(btn_sel, timeout=3000)
+                            human_click(login_page, btn_sel)
                             break
                         except:
                             continue

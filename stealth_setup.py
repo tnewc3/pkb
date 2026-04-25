@@ -22,7 +22,16 @@ def human_type(page: Page, selector: str, text: str):
     el = page.wait_for_selector(selector, state="visible", timeout=10000)
     el.scroll_into_view_if_needed()
     time.sleep(random.uniform(0.1, 0.3))
-    el.click()
+    # Move mouse naturally to the field before clicking
+    box = el.bounding_box()
+    if box:
+        x = box["x"] + box["width"]  * random.uniform(0.3, 0.7)
+        y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+        page.mouse.move(x, y, steps=random.randint(8, 20))
+        time.sleep(random.uniform(0.1, 0.25))
+        page.mouse.click(x, y)
+    else:
+        el.click()
     time.sleep(random.uniform(0.15, 0.35))
     # Clear using fill("") which is scoped to the element (avoids Ctrl+A selecting the whole page)
     el.fill("")
