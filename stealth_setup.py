@@ -18,15 +18,15 @@ def human_click(page: Page, selector: str):
         page.click(selector)
 
 def human_type(page: Page, selector: str, text: str):
-    # Wait for the element to be visible and interactable before clicking
+    # Wait for visible + interactable
     el = page.wait_for_selector(selector, state="visible", timeout=10000)
     el.scroll_into_view_if_needed()
     time.sleep(random.uniform(0.1, 0.3))
     el.click()
     time.sleep(random.uniform(0.15, 0.35))
-    # Clear any pre-filled content
-    page.keyboard.press("Control+a")
-    page.keyboard.press("Delete")
+    # Clear using fill("") which is scoped to the element (avoids Ctrl+A selecting the whole page)
+    el.fill("")
+    time.sleep(random.uniform(0.1, 0.2))
     # Type character by character with human-like delays
     for char in text:
         page.keyboard.type(char)
