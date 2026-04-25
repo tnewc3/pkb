@@ -222,6 +222,15 @@ class LoginWizard(tk.Toplevel):
                         )
                     except:
                         pass
+                    # Check if Target showed an on-page error
+                    err_sel = "[data-test='errorMessage'], .errorMessage, [class*='error']"
+                    try:
+                        err_el = login_page.query_selector(err_sel)
+                        if err_el and err_el.is_visible():
+                            err_text = err_el.inner_text()
+                            print(f"[Login:target] Page error: {err_text}")
+                    except Exception:
+                        pass
                     url = login_page.url.lower()
                     return "target.com" in url and "signin" not in url and "login" not in url
 
