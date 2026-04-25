@@ -178,8 +178,8 @@ class LoginWizard(tk.Toplevel):
                         for sel in [
                             "button[data-test='passkey-cancel-button']",
                             "a[data-test='use-password-link']",
-                            "button:has-text('Use password')",
-                            "button:has-text('Sign in with a password')",
+                            "button:has-text('Use password'),"
+                            "button:has-text('Sign in with a password'),"
                             "[data-test='passkeys-cancel']",
                         ]:
                             try:
@@ -190,9 +190,11 @@ class LoginWizard(tk.Toplevel):
                     except:
                         pass
 
-                    page.wait_for_selector("#password", timeout=10000)
+                    # Use input[type='password'] — more reliable than #password
+                    # which Target does not always set on the password step page
+                    page.wait_for_selector("input[type='password']", timeout=10000)
                     time.sleep(random.uniform(0.5, 1.0))
-                    human_type(page, "#password", password)
+                    human_type(page, "input[type='password']", password)
                     time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
@@ -221,7 +223,7 @@ class LoginWizard(tk.Toplevel):
                     page.wait_for_selector("#email", timeout=15000)
                     time.sleep(random.uniform(1.2, 2.5))
                     human_type(page, "#email", email)
-                    human_type(page, "#password", password)
+                    human_type(page, "input[type='password']", password)
                     time.sleep(random.uniform(0.4, 0.9))
                     page.click("button[type='submit']")
 
@@ -235,7 +237,8 @@ class LoginWizard(tk.Toplevel):
                     url = page.url.lower()
                     return "walmart.com" in url and "/account/login" not in url
 
-            except:
+            except Exception as login_err:
+                print(f"[Login:{retailer}] error: {login_err}")
                 return False
 
         try:
