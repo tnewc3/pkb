@@ -146,28 +146,31 @@ class LoginWizard(tk.Toplevel):
 
     def _attempt_login(self, retailer, email, password, status_var):
         def _login(page: Page) -> bool:
+            # Use a dedicated fresh page for each login so the shared
+            # monitoring page cannot interfere via cross-navigation.
+            login_page = page.context.new_page()
             try:
                 if retailer == "target":
-                    page.goto("https://www.target.com/account",
-                              wait_until="domcontentloaded", timeout=20000)
+                    login_page.goto("https://www.target.com/account",
+                                    wait_until="domcontentloaded", timeout=20000)
                     try:
-                        page.click(
+                        login_page.click(
                             "button[data-test='accountNav-signIn']",
                             timeout=5000)
                     except:
                         pass
 
-                    page.wait_for_selector("#username", timeout=15000)
+                    login_page.wait_for_selector("#username", timeout=15000)
                     time.sleep(random.uniform(0.8, 1.5))
-                    human_type(page, "#username", email)
+                    human_type(login_page, "#username", email)
                     try:
-                        page.click("button[type='submit']", timeout=5000)
+                        login_page.click("button[type='submit']", timeout=5000)
                     except:
                         pass
 
                     # Dismiss passkey prompt if shown
                     try:
-                        page.wait_for_selector(
+                        login_page.wait_for_selector(
                             "button[data-test='passkey-cancel-button'],"
                             "a[data-test='use-password-link'],"
                             "button:has-text('Use password'),"
@@ -179,70 +182,116 @@ class LoginWizard(tk.Toplevel):
                             "button[data-test='passkey-cancel-button']",
                             "a[data-test='use-password-link']",
                             "button:has-text('Use password'),"
-                            "button:has-text('Sign in with a password'),"
+                            "button:has-text('Sign in with a password')",
                             "[data-test='passkeys-cancel']",
                         ]:
                             try:
-                                page.click(sel, timeout=2000)
+                                login_page.click(sel, timeout=2000)
                                 break
                             except:
                                 continue
                     except:
                         pass
 
-                    # Use input[type='password'] — more reliable than #password
-                    # which Target does not always set on the password step page
-                    page.wait_for_selector("input[type='password']", timeout=10000)
+                    login_page.wait_for_selector("input[type='password']", timeout=10000)
                     time.sleep(random.uniform(0.5, 1.0))
-                    human_type(page, "input[type='password']", password)
+                    human_type(login_page, "input[type='password']", password)
                     time.sleep(random.uniform(0.4, 0.9))
-                    page.click("button[type='submit']")
+                    login_page.click("button[type='submit']")
 
                     try:
-                        page.wait_for_url(
+                        login_page.wait_for_url(
                             re.compile(r"(?!.*(/signin|/login)).*target\.com.*"),
                             timeout=20000
                         )
                     except:
                         pass
-                    url = page.url.lower()
+                    url = login_page.url.lower()
                     return "target.com" in url and "signin" not in url and "login" not in url
 
                 elif retailer == "walmart":
-                    page.goto("https://www.walmart.com/account/login",
-                              wait_until="domcontentloaded", timeout=20000)
+                    # Walmart redirects to identity.walmart.com (OIDC).
+                    # Navigate and wait for the redirect to settle fully.
+                    login_page.goto("https://www.walmart.com/account/login",
+                                    wait_until="domcontentloaded", timeout=20000)
                     try:
-                        page.wait_for_load_state("networkidle", timeout=10000)
+                        login_page.wait_for_load_state("networkidle", timeout=12000)
                     except:
                         pass
-                    page.mouse.move(
-                        random.randint(200, 800),
+
+                    # Human-like mouse movement before interacting
+                    login_page.mouse.move(
                         random.randint(200, 600),
+                        random.randint(150, 400),
                         steps=random.randint(15, 30)
                     )
-                    page.wait_for_selector("#email", timeout=15000)
-                    time.sleep(random.uniform(1.2, 2.5))
-                    human_type(page, "#email", email)
-                    human_type(page, "input[type='password']", password)
+                    time.sleep(random.uniform(0.8, 1.5))
+
+                    # Step 1 — "Phone number or email" field on identity.walmart.com
+                    # Selector covers both the old #email and the new unlabelled input
+                    email_sel = (
+                        "#email, "
+                        "input[name='email'], "
+                        "input[type='email'], "
+                        "input[autocomplete='email'], "
+                        "input[autocomplete='username']"
+                    )
+                    login_page.wait_for_selector(email_sel, state="visible", timeout=15000)
+                    time.sleep(random.uniform(1.0, 2.0))
+                    human_type(login_page, email_sel, email)
+                    time.sleep(random.uniform(0.5, 1.0))
+
+                    # Click Continue / Next button
+                    for btn_sel in [
+                        "button[type='submit']",
+                        "button:has-text('Continue')",
+                        "button:has-text('Next')",
+                    ]:
+                        try:
+                            login_page.click(btn_sel, timeout=3000)
+                            break
+                        except:
+                            continue
+
+                    # Step 2 — password field (may be on same page or new page after Continue)
+                    login_page.wait_for_selector("input[type='password']",
+                                                 state="visible", timeout=15000)
+                    time.sleep(random.uniform(0.8, 1.5))
+                    human_type(login_page, "input[type='password']", password)
                     time.sleep(random.uniform(0.4, 0.9))
-                    page.click("button[type='submit']")
+
+                    for btn_sel in [
+                        "button[type='submit']",
+                        "button:has-text('Sign in')",
+                        "button:has-text('Continue')",
+                    ]:
+                        try:
+                            login_page.click(btn_sel, timeout=3000)
+                            break
+                        except:
+                            continue
 
                     try:
-                        page.wait_for_url(
-                            re.compile(r"(?!.*(/account/login)).*walmart\.com.*"),
+                        login_page.wait_for_url(
+                            re.compile(r"walmart\.com(?!/account/login)"),
                             timeout=20000
                         )
                     except:
                         pass
-                    url = page.url.lower()
-                    return "walmart.com" in url and "/account/login" not in url
+                    url = login_page.url.lower()
+                    return "walmart.com" in url and "/account/login" not in url and "identity.walmart.com" not in url
 
             except Exception as login_err:
                 print(f"[Login:{retailer}] error: {login_err}")
                 return False
+            finally:
+                try:
+                    login_page.close()
+                except:
+                    pass
 
         try:
-            ok = self.pw.submit(_login, f"login:{retailer}", timeout=45)
+            ok = self.pw.submit(_login, f"login:{retailer}", timeout=60)
             if ok:
                 if retailer == "target":
                     self._target_ok = True
