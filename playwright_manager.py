@@ -9,7 +9,7 @@ SESSION_FILE = "sessions.json"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
     )
 }
 
@@ -113,6 +113,12 @@ class PlaywrightManager:
                 user_agent=HEADERS["User-Agent"],
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
+                extra_http_headers={
+                    "accept-language": "en-US,en;q=0.9",
+                    "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                },
             )
 
             self._apply_stealth(self._context)
