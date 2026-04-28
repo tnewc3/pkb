@@ -527,7 +527,8 @@ class PokemonBotGUI:
     def _on_relogin_complete(self):
         threading.Thread(target=self._restart_pw, daemon=True).start()
 
-    def _restart_pw(self):\n        self._set_status("Restarting browser...")
+    def _restart_pw(self):
+        self._set_status("Restarting browser...")
         self.pw = PlaywrightManager()
         self.cart = CartManager(self.pw)
         self.engine.pw       = self.pw
