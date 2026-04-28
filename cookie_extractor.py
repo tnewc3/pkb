@@ -15,8 +15,29 @@ from pathlib import Path
 
 _EDGE_USER_DATA = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"
 _LOCAL_STATE    = _EDGE_USER_DATA / "Local State"
-_COOKIES_DB     = _EDGE_USER_DATA / "Default" / "Network" / "Cookies"
 _TMP_COOKIES    = Path(os.environ.get("TEMP", "")) / "_pkb_cookies_tmp.db"
+
+
+def _find_cookies_db() -> Path:
+    """
+    Find the Edge cookies DB for the profile that has the most cookies
+    (handles non-Default profile names like 'Profile 1').
+    """
+    candidates = []
+    for profile_dir in _EDGE_USER_DATA.iterdir():
+        db = profile_dir / "Network" / "Cookies"
+        if db.exists():
+            candidates.append(db)
+    if not candidates:
+        raise FileNotFoundError(
+            "Edge cookie database not found. "
+            "Make sure Edge is installed and has been opened at least once."
+        )
+    # Prefer the profile with the most cookies (most likely the active one)
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
+_COOKIES_DB = _EDGE_USER_DATA / "Default" / "Network" / "Cookies"
 
 
 class _DATABLOB(ctypes.Structure):
@@ -78,19 +99,20 @@ def extract_cookies(domains: list) -> list:
     Example:
         cookies = extract_cookies([".target.com", "target.com"])
     """
-    if not _COOKIES_DB.exists():
+    if not _EDGE_USER_DATA.exists():
         raise FileNotFoundError(
             "Edge cookie database not found. "
             "Make sure Edge is installed and has been opened at least once."
         )
 
+    cookies_db = _find_cookies_db()
     key = _get_aes_key()
 
     # Copy the DB so we don't hold a lock on Edge's live file
-    shutil.copy2(_COOKIES_DB, _TMP_COOKIES)
+    shutil.copy2(cookies_db, _TMP_COOKIES)
     # Also copy WAL/SHM files if present (needed for consistent reads)
     for ext in ("-wal", "-shm"):
-        src = Path(str(_COOKIES_DB) + ext)
+        src = Path(str(cookies_db) + ext)
         if src.exists():
             shutil.copy2(src, Path(str(_TMP_COOKIES) + ext))
 
