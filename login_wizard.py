@@ -1,13 +1,9 @@
 import tkinter as tk
 from tkinter import messagebox
 import threading
-import json
+import subprocess
 import os
-import time
-from playwright.sync_api import Page
-from playwright_manager import PlaywrightManager
-
-SESSION_FILE = "sessions.json"
+from playwright_manager import PROFILE_DIR, _find_chrome
 
 LOGIN_CONFIG = {
     "target": {
@@ -30,26 +26,25 @@ LOGIN_CONFIG = {
 class LoginWizard(tk.Toplevel):
     STEPS = ["welcome", "target", "walmart", "done"]
 
-    def __init__(self, parent, pw: PlaywrightManager, on_complete):
+    def __init__(self, parent, on_complete):
         super().__init__(parent)
-        self.pw          = pw
-        self.on_complete = on_complete
+        self.on_complete   = on_complete
         self.title("Pokemon Bot - Setup")
         self.geometry("620x480")
         self.resizable(False, False)
         self.configure(bg="#1a1a2e")
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._step       = 0
-        self._target_ok  = False
-        self._walmart_ok = False
-        self._polling    = False
-        self._container  = tk.Frame(self, bg="#1a1a2e")
+        self._step         = 0
+        self._target_ok    = False
+        self._walmart_ok   = False
+        self._chrome_proc  = None
+        self._container    = tk.Frame(self, bg="#1a1a2e")
         self._container.pack(fill="both", expand=True, padx=30, pady=20)
         self._show_step()
 
     def _show_step(self):
-        self._polling = False  # cancel any running poll on step change
+        self._kill_chrome()    # close any open login browser on step change
         for w in self._container.winfo_children():
             w.destroy()
         step = self.STEPS[self._step]
@@ -81,7 +76,8 @@ class LoginWizard(tk.Toplevel):
         self._progress(0)
         self._spacer(20)
         self._btn("Begin Setup", self._next, "#4ade80")
-        if os.path.exists(SESSION_FILE):
+        profile_cookies = PROFILE_DIR / "Default" / "Network" / "Cookies"
+        if profile_cookies.exists():
             self._spacer(6)
             tk.Label(self._container,
                      text="Saved session found -- you can skip setup.",
@@ -114,6 +110,15 @@ class LoginWizard(tk.Toplevel):
         btn_row = tk.Frame(self._container, bg="#1a1a2e")
         btn_row.pack(fill="x", pady=8)
 
+        done_btn = tk.Button(
+            btn_row, text="I've signed in ✓",
+            bg="#4ade80", fg="#1a1a2e",
+            font=("Helvetica", 10, "bold"),
+            relief="flat", padx=14, pady=8,
+            state="disabled",
+        )
+        done_btn.pack(side="left", padx=(0, 8))
+
         open_btn = tk.Button(
             btn_row, text=f"Open {logo}",
             bg=color, fg="white",
@@ -122,14 +127,20 @@ class LoginWizard(tk.Toplevel):
         )
         open_btn.pack(side="left", padx=(0, 8))
 
+        def _on_done():
+            if retailer == "target":
+                self._target_ok = True
+            else:
+                self._walmart_ok = True
+            self._next()
+
+        done_btn.config(command=_on_done)
+
         def _on_open():
-            if self._polling:
-                return
-            self._polling = True
-            open_btn.config(state="disabled", text="Browser opened...")
+            open_btn.config(state="disabled")
             threading.Thread(
-                target=self._open_and_wait,
-                args=(retailer, status_var),
+                target=self._launch_login_chrome,
+                args=(cfg["url"], status_var, done_btn),
                 daemon=True,
             ).start()
 
@@ -142,68 +153,48 @@ class LoginWizard(tk.Toplevel):
                   relief="flat", padx=10, pady=8,
                   ).pack(side="left")
 
-    def _open_and_wait(self, retailer: str, status_var: tk.StringVar):
-        """Open the login URL in a new browser tab and poll until signed in."""
-        cfg  = LOGIN_CONFIG[retailer]
-        url  = cfg["url"]
-        sels = [s.strip() for s in cfg["logged_in_sel"].split(",")]
+    def _launch_login_chrome(self, url: str, status_var: tk.StringVar,
+                              done_btn: tk.Button):
+        """Launch a plain Chrome process (no CDP) for the user to log in."""
+        try:
+            chrome_exe = _find_chrome()
+        except FileNotFoundError as e:
+            self.after(0, lambda: status_var.set(str(e)))
+            return
 
-        def _open(page: Page):
-            new_pg = page.context.new_page()
-            new_pg.goto(url, wait_until="domcontentloaded", timeout=20000)
-            return True
+        # Kill any previous login Chrome before launching a new one
+        self._kill_chrome()
 
         try:
-            self.pw.submit(_open, f"manual_login_open:{retailer}", timeout=30)
+            self._chrome_proc = subprocess.Popen(
+                [
+                    chrome_exe,
+                    f"--user-data-dir={PROFILE_DIR}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--no-service-autorun",
+                    url,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except Exception as e:
             self.after(0, lambda: status_var.set(f"Could not open browser: {e}"))
-            self._polling = False
             return
 
         self.after(0, lambda: status_var.set(
-            "Waiting for you to sign in... (up to 5 min)"))
+            "Sign in, then click  'I've signed in ✓'  above."
+        ))
+        self.after(0, lambda: done_btn.config(state="normal"))
 
-        def _check(page: Page) -> bool:
-            for pg in page.context.pages:
-                for sel in sels:
-                    try:
-                        el = pg.query_selector(sel)
-                        if el and el.is_visible():
-                            return True
-                    except Exception:
-                        pass
-            return False
-
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            time.sleep(2)
-            if not self._polling:
-                return  # Skip was pressed; abandon this poll loop
+    def _kill_chrome(self):
+        """Terminate the login Chrome subprocess if it's still running."""
+        if self._chrome_proc is not None:
             try:
-                ok = self.pw.submit(_check,
-                                    f"manual_login_check:{retailer}",
-                                    timeout=10)
+                self._chrome_proc.terminate()
             except Exception:
-                ok = False
-
-            if ok:
-                self.pw.save_session()
-                if retailer == "target":
-                    self._target_ok = True
-                else:
-                    self._walmart_ok = True
-                self.after(0, lambda: status_var.set("Signed in successfully!"))
-                self.after(800, self._next)
-                return
-
-            remaining = int(deadline - time.monotonic())
-            self.after(0, lambda r=remaining: status_var.set(
-                f"Waiting for sign-in... ({r // 60}m {r % 60:02d}s remaining)"
-            ))
-
-        self.after(0, lambda: status_var.set(
-            "Timed out. Press Skip or click the button again."))
-        self._polling = False
+                pass
+            self._chrome_proc = None
 
     # ------------------------------------------------------------------ done
     def _build_done(self):
@@ -264,6 +255,7 @@ class LoginWizard(tk.Toplevel):
                  height=10).place(x=0, y=0)
 
     def _on_close(self):
+        self._kill_chrome()
         if messagebox.askyesno("Exit",
                                "Cancel setup and exit?",
                                parent=self):

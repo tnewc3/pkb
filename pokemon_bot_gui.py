@@ -170,16 +170,25 @@ class PokemonBotGUI:
                          args=(False,), daemon=True).start()
 
     def _init_playwright(self):
-        self._set_status("Starting browser...")
-        self.pw.start()
+        # Don't start the CDP browser yet — login wizard opens a clean Chrome
+        # instance instead.  pw.start() is called in _on_wizard_complete.
         self.root.after(0, self._show_wizard)
 
     def _show_wizard(self):
         from login_wizard import LoginWizard
-        LoginWizard(self.root, self.pw,
+        LoginWizard(self.root,
                     on_complete=self._on_wizard_complete)
 
     def _on_wizard_complete(self):
+        # Now it's safe to start the CDP Chrome — the profile has login cookies.
+        threading.Thread(target=self._start_pw_and_launch, daemon=True).start()
+
+    def _start_pw_and_launch(self):
+        self._set_status("Starting browser...")
+        self.pw.start()
+        self.root.after(0, self._finish_launch)
+
+    def _finish_launch(self):
         self.root.deiconify()
         self._build_ui()
         threading.Thread(target=self._load_products, daemon=True).start()
@@ -508,8 +517,29 @@ class PokemonBotGUI:
 
     def _relogin(self):
         from login_wizard import LoginWizard
-        LoginWizard(self.root, self.pw,
-                    on_complete=lambda: self._log("Re-login complete."))
+        # Stop the CDP Chrome so the profile lock is released
+        self.session_guard.stop()
+        self.engine.stop()
+        self.pw.stop()
+        LoginWizard(self.root,
+                    on_complete=self._on_relogin_complete)
+
+    def _on_relogin_complete(self):
+        threading.Thread(target=self._restart_pw, daemon=True).start()
+
+    def _restart_pw(self):\n        self._set_status("Restarting browser...")
+        self.pw = PlaywrightManager()
+        self.cart = CartManager(self.pw)
+        self.engine.pw       = self.pw
+        self.engine.cart     = self.cart
+        self.session_guard.pw = self.pw
+        self.pw.start()
+        self.root.after(0, self._after_relogin)
+
+    def _after_relogin(self):
+        self._set_status("Ready")
+        self.session_guard.start()
+        self._log("Re-login complete.")
 
     def _open_settings(self):
         SettingsWindow(self.root, self.settings,
