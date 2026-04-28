@@ -9,6 +9,38 @@ from playwright_manager import _find_edge, _EDGE_USER_DATA
 
 SESSION_FILE = "sessions.json"
 
+
+def _load_session() -> dict:
+    """Load existing sessions.json or return a fresh empty session."""
+    if os.path.exists(SESSION_FILE):
+        try:
+            with open(SESSION_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault("cookies", [])
+                data.setdefault("origins", [])
+                return data
+        except Exception:
+            pass
+    return {"cookies": [], "origins": []}
+
+
+def _save_cookies_to_session(new_cookies: list, domain_keys: list):
+    """
+    Merge new_cookies into sessions.json, replacing any existing cookies whose
+    domain matches one of `domain_keys` (so re-importing a retailer overwrites
+    only that retailer's cookies, leaving the other retailer's intact).
+    """
+    session = _load_session()
+    keep = []
+    for c in session.get("cookies", []):
+        dom = (c.get("domain") or "").lstrip(".").lower()
+        if not any(dom.endswith(k.lstrip(".").lower()) for k in domain_keys):
+            keep.append(c)
+    session["cookies"] = keep + list(new_cookies)
+    with open(SESSION_FILE, "w") as f:
+        json.dump(session, f)
+
 LOGIN_CONFIG = {
     "target": {
         "url":           "https://www.target.com",
@@ -183,12 +215,10 @@ class LoginWizard(tk.Toplevel):
             return
 
         # Save to sessions.json in Playwright storage_state format
-        session = {"cookies": cookies, "origins": []}
         try:
-            with open(SESSION_FILE, "w") as f:
-                json.dump(session, f)
+            _save_cookies_to_session(cookies, ["target.com"])
         except Exception as e:
-            self.after(0, lambda: status_var.set(f"Could not save session: {e}"))
+            self.after(0, lambda m=str(e): status_var.set(f"Could not save session: {m}"))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
             return
 
@@ -240,9 +270,14 @@ class LoginWizard(tk.Toplevel):
         open_btn.pack(side="left", padx=(0, 8))
 
         def _on_done():
-            if retailer == "walmart":
-                self._walmart_ok = True
-            self._next()
+            # Extract this retailer's cookies from Edge after manual sign-in.
+            done_btn.config(state="disabled", text="Saving session...")
+            self._kill_chrome()  # close the login Edge so its DB unlocks
+            threading.Thread(
+                target=self._save_edge_login_cookies,
+                args=(retailer, status_var, done_btn, open_btn),
+                daemon=True,
+            ).start()
 
         done_btn.config(command=_on_done)
 
@@ -277,6 +312,74 @@ class LoginWizard(tk.Toplevel):
                   font=("Helvetica", 9),
                   relief="flat", padx=10, pady=8,
                   ).pack(side="left")
+
+    def _save_edge_login_cookies(self, retailer: str,
+                                 status_var: tk.StringVar,
+                                 done_btn: tk.Button,
+                                 open_btn: tk.Button):
+        """
+        After the user signs into a retailer in Edge, extract the cookies for
+        that retailer's domain and merge them into sessions.json.
+        """
+        domain_map = {
+            "target":  ["target.com"],
+            "walmart": ["walmart.com"],
+        }
+        domains = domain_map.get(retailer, [retailer + ".com"])
+
+        # Give Edge a couple seconds to fully release its SQLite lock.
+        import time as _time
+        _time.sleep(2.0)
+
+        try:
+            from cookie_extractor import extract_cookies, CookieExtractionError
+        except ImportError as e:
+            err = f"cookie_extractor missing: {e}\nRun update.bat."
+            self.after(0, lambda m=err: messagebox.showerror("Save Failed", m))
+            self.after(0, lambda: done_btn.config(state="normal", text="I've signed in \u2713"))
+            self.after(0, lambda: open_btn.config(state="normal"))
+            return
+
+        try:
+            cookies = extract_cookies(domains)
+        except CookieExtractionError as e:
+            err = str(e)
+            self.after(0, lambda m=err: messagebox.showerror("Save Failed", m))
+            self.after(0, lambda m=err: status_var.set(m.splitlines()[0]))
+            self.after(0, lambda: done_btn.config(state="normal", text="I've signed in \u2713"))
+            self.after(0, lambda: open_btn.config(state="normal"))
+            return
+        except Exception as e:
+            err = str(e)
+            self.after(0, lambda m=err: status_var.set(f"Error: {m}"))
+            self.after(0, lambda: done_btn.config(state="normal", text="I've signed in \u2713"))
+            self.after(0, lambda: open_btn.config(state="normal"))
+            return
+
+        if not cookies:
+            self.after(0, lambda: status_var.set(
+                f"No {retailer.capitalize()} cookies found. Sign in again, then retry."))
+            self.after(0, lambda: done_btn.config(state="normal", text="I've signed in \u2713"))
+            self.after(0, lambda: open_btn.config(state="normal"))
+            return
+
+        try:
+            _save_cookies_to_session(cookies, domains)
+        except Exception as e:
+            err = str(e)
+            self.after(0, lambda m=err: status_var.set(f"Could not save session: {m}"))
+            self.after(0, lambda: done_btn.config(state="normal", text="I've signed in \u2713"))
+            self.after(0, lambda: open_btn.config(state="normal"))
+            return
+
+        if retailer == "walmart":
+            self._walmart_ok = True
+        elif retailer == "target":
+            self._target_ok = True
+
+        n = len(cookies)
+        self.after(0, lambda: status_var.set(f"Saved {n} {retailer} cookies."))
+        self.after(600, self._next)
 
     def _kill_chrome(self):
         """Terminate the login Chrome subprocess if it's still running."""

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from urllib.parse import quote_plus
 from playwright.sync_api import sync_playwright, Page
 
 PRODUCTS_FILE = "products.json"
@@ -34,7 +35,7 @@ def search_target(page: Page, term: str) -> list:
     products = []
     try:
         page.goto(
-            f"https://www.target.com/s?searchTerm={term.replace('','+')}",
+            f"https://www.target.com/s?searchTerm={quote_plus(term)}",
             wait_until="domcontentloaded", timeout=20000
         )
         page.wait_for_selector("[data-test='product-details']", timeout=12000)
@@ -85,7 +86,7 @@ def search_walmart(page: Page, term: str) -> list:
     products = []
     try:
         page.goto(
-            f"https://www.walmart.com/search?q={term.replace('','+')}",
+            f"https://www.walmart.com/search?q={quote_plus(term)}",
             wait_until="domcontentloaded", timeout=20000
         )
         page.wait_for_selector(

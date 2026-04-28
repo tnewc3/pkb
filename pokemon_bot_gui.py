@@ -349,7 +349,7 @@ class PokemonBotGUI:
         c  = tk.Canvas(self.cart_tab, bg="#1a1a2e", highlightthickness=0)
         sb = ttk.Scrollbar(self.cart_tab, orient="vertical", command=c.yview)
         self.cart_list_frame = tk.Frame(c, bg="#1a1a2e")
-        self.cart_list_frame.bind("<Configure",
+        self.cart_list_frame.bind("<Configure>",
             lambda e: c.configure(scrollregion=c.bbox("all")))
         c.create_window((0, 0), window=self.cart_list_frame, anchor="nw")
         c.configure(yscrollcommand=sb.set)
