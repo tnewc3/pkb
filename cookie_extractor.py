@@ -98,12 +98,15 @@ def extract_cookies(domains: list) -> list:
     try:
         conn = sqlite3.connect(f"file:{_TMP_COOKIES}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        placeholders = ",".join("?" * len(domains))
+        # Match any host that ends with one of the given domain strings
+        # e.g. "target.com" matches ".target.com", "www.target.com", etc.
+        conditions = " OR ".join("host_key LIKE ?" for _ in domains)
+        patterns   = [f"%{d.lstrip('.')}" for d in domains]
         rows = conn.execute(
             f"SELECT host_key, name, encrypted_value, path, expires_utc, "
             f"is_secure, is_httponly FROM cookies "
-            f"WHERE host_key IN ({placeholders})",
-            domains,
+            f"WHERE {conditions}",
+            patterns,
         ).fetchall()
         conn.close()
 

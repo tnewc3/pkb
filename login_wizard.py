@@ -101,6 +101,7 @@ class LoginWizard(tk.Toplevel):
         self._label(
             "1.  Open Edge and sign into Target normally.\n"
             "2.  Close Edge completely (all windows).\n"
+            "    (Check Task Manager and end all msedge.exe processes.)\n"
             "3.  Click  'Import Target Session'  below."
         )
         self._spacer(12)
@@ -141,10 +142,7 @@ class LoginWizard(tk.Toplevel):
         """Read Target cookies from Edge's SQLite database and save them."""
         try:
             from cookie_extractor import extract_cookies
-            cookies = extract_cookies([
-                ".target.com", "target.com",
-                ".gsp.target.com", "gsp.target.com",
-            ])
+            cookies = extract_cookies(["target.com"])
         except FileNotFoundError as e:
             self.after(0, lambda: status_var.set(str(e)))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
@@ -153,7 +151,7 @@ class LoginWizard(tk.Toplevel):
             msg = str(e)
             if "Edge" in msg or "close" in msg.lower():
                 self.after(0, lambda: status_var.set(
-                    "Close Edge completely, then try again."))
+                    "Close Edge completely (including Task Manager), then try again."))
             else:
                 self.after(0, lambda: status_var.set(f"Error: {e}"))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
