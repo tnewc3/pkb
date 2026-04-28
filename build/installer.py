@@ -69,6 +69,7 @@ BOT_FILES = [
     "config.py",
     "proxy_manager.py",
     "proxy_panel.py",
+    "version.txt",
 ]
 
 
@@ -95,6 +96,7 @@ class Installer:
             ("Installing Playwright browsers", self._install_browsers),
             ("Creating .env file",           self._create_env),
             ("Creating launcher",            self._create_launcher),
+            ("Creating update launcher",     self._create_update_launcher),
             ("Creating desktop shortcut",    self._create_shortcut),
             ("Creating uninstaller",         self._create_uninstaller),
         ]
@@ -249,6 +251,27 @@ class Installer:
         )
         self.shortcut.write_text(bat_content)
         print(f"   Created shortcut: {self.shortcut}")
+
+    def _create_update_launcher(self):
+        # Copy update.py from build/ into the install directory
+        updater_src = Path(__file__).parent / "update.py"
+        updater_dst = INSTALL_DIR / "update.py"
+        if updater_src.exists():
+            shutil.copy2(updater_src, updater_dst)
+        else:
+            self.errors.append("update.py not found in build/ — skipping")
+            return
+
+        python_exe = VENV_DIR / "Scripts" / "python.exe"
+        update_bat = INSTALL_DIR / "update.bat"
+        update_bat.write_text(
+            f"@echo off\n"
+            f"title Pokemon Card Bot - Updater\n"
+            f"cd /d \"{INSTALL_DIR}\"\n"
+            f'"{python_exe}" update.py\n'
+            f"if %errorlevel% neq 0 pause\n"
+        )
+        print(f"   Created {update_bat}")
 
     def _create_uninstaller(self):
         uninstall = INSTALL_DIR / "uninstall.py"

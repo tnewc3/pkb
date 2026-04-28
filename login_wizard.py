@@ -3,15 +3,28 @@ from tkinter import messagebox
 import threading
 import json
 import os
-import re
-import random
 import time
-import urllib.parse
 from playwright.sync_api import Page
 from playwright_manager import PlaywrightManager
-from stealth_setup import human_type, human_click, human_delay
 
 SESSION_FILE = "sessions.json"
+
+LOGIN_CONFIG = {
+    "target": {
+        "url":          "https://www.target.com/account/login",
+        "logged_in_sel": "[data-test='accountNav-greeting']",
+        "color":        "#e94560",
+        "logo":         "Target",
+        "pct":          33,
+    },
+    "walmart": {
+        "url":          "https://www.walmart.com/account/login",
+        "logged_in_sel": ".account-menu__user-info, [data-automation-id='user-name']",
+        "color":        "#0071ce",
+        "logo":         "Walmart",
+        "pct":          66,
+    },
+}
 
 
 class LoginWizard(tk.Toplevel):
@@ -19,24 +32,24 @@ class LoginWizard(tk.Toplevel):
 
     def __init__(self, parent, pw: PlaywrightManager, on_complete):
         super().__init__(parent)
-        self.pw              = pw
-        self.on_complete     = on_complete
+        self.pw          = pw
+        self.on_complete = on_complete
         self.title("Pokemon Bot - Setup")
-        self.geometry("620x520")
+        self.geometry("620x480")
         self.resizable(False, False)
         self.configure(bg="#1a1a2e")
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._step           = 0
-        self._target_ok      = False
-        self._walmart_ok     = False
-        self._captcha_event  = threading.Event()
-        self._captcha_btn    = None
-        self._container      = tk.Frame(self, bg="#1a1a2e")
+        self._step       = 0
+        self._target_ok  = False
+        self._walmart_ok = False
+        self._polling    = False
+        self._container  = tk.Frame(self, bg="#1a1a2e")
         self._container.pack(fill="both", expand=True, padx=30, pady=20)
         self._show_step()
 
     def _show_step(self):
+        self._polling = False  # cancel any running poll on step change
         for w in self._container.winfo_children():
             w.destroy()
         step = self.STEPS[self._step]
@@ -77,40 +90,21 @@ class LoginWizard(tk.Toplevel):
             self._btn("Skip (use saved session)", self._jump_done, "#0f3460")
 
     def _build_login(self, retailer: str):
-        is_target = retailer == "target"
-        color     = "#e94560" if is_target else "#0071ce"
-        logo      = "Target" if is_target else "Walmart"
-        pct       = 33 if is_target else 66
+        cfg   = LOGIN_CONFIG[retailer]
+        color = cfg["color"]
+        logo  = cfg["logo"]
 
         self._title(f"Sign in to {logo}")
         self._spacer(8)
-        self._label(f"Enter your {logo} credentials below.")
+        self._label(
+            f"1.  Click  'Open {logo} Login Page'  below.\n"
+            f"2.  Sign in to {logo} in the browser window that opens.\n"
+            f"3.  The bot detects your login automatically —\n"
+            f"    no need to come back and click anything."
+        )
         self._spacer(12)
-        self._progress(pct)
+        self._progress(cfg["pct"])
         self._spacer(16)
-
-        tk.Label(self._container, text="Email",
-                 font=("Helvetica", 10), fg="#a8dadc",
-                 bg="#1a1a2e", anchor="w").pack(fill="x")
-        email_var = tk.StringVar()
-        email_ent = tk.Entry(self._container, textvariable=email_var,
-                             font=("Helvetica", 11),
-                             bg="#16213e", fg="white",
-                             insertbackground="white", relief="flat",
-                             highlightthickness=1, highlightcolor=color)
-        email_ent.pack(fill="x", ipady=6, pady=(2, 10))
-        email_ent.focus_set()
-
-        tk.Label(self._container, text="Password",
-                 font=("Helvetica", 10), fg="#a8dadc",
-                 bg="#1a1a2e", anchor="w").pack(fill="x")
-        pass_var = tk.StringVar()
-        pass_ent = tk.Entry(self._container, textvariable=pass_var,
-                            show="*", font=("Helvetica", 11),
-                            bg="#16213e", fg="white",
-                            insertbackground="white", relief="flat",
-                            highlightthickness=1, highlightcolor=color)
-        pass_ent.pack(fill="x", ipady=6, pady=(2, 16))
 
         status_var = tk.StringVar(value="")
         tk.Label(self._container, textvariable=status_var,
@@ -120,312 +114,96 @@ class LoginWizard(tk.Toplevel):
         btn_row = tk.Frame(self._container, bg="#1a1a2e")
         btn_row.pack(fill="x", pady=8)
 
-        def _do():
-            e, p = email_var.get().strip(), pass_var.get().strip()
-            if not e or not p:
-                status_var.set("Enter both email and password.")
+        open_btn = tk.Button(
+            btn_row, text=f"Open {logo} Login Page",
+            bg=color, fg="white",
+            font=("Helvetica", 10, "bold"),
+            relief="flat", padx=14, pady=8,
+        )
+        open_btn.pack(side="left", padx=(0, 8))
+
+        def _on_open():
+            if self._polling:
                 return
-            status_var.set("Logging in...")
-            self.update_idletasks()
+            self._polling = True
+            open_btn.config(state="disabled", text="Browser opened...")
             threading.Thread(
-                target=self._attempt_login,
-                args=(retailer, e, p, status_var),
-                daemon=True
+                target=self._open_and_wait,
+                args=(retailer, status_var),
+                daemon=True,
             ).start()
 
-        tk.Button(btn_row, text=f"Login to {logo}",
-                  command=_do, bg=color, fg="white",
-                  font=("Helvetica", 10, "bold"),
-                  relief="flat", padx=14, pady=8
-                  ).pack(side="left", padx=(0, 8))
+        open_btn.config(command=_on_open)
+
         tk.Button(btn_row, text="Skip",
                   command=self._next,
                   bg="#3b3b6b", fg="#ccc",
                   font=("Helvetica", 9),
-                  relief="flat", padx=10, pady=8
+                  relief="flat", padx=10, pady=8,
                   ).pack(side="left")
 
-        pass_ent.bind("<Return>", lambda e: _do())
+    def _open_and_wait(self, retailer: str, status_var: tk.StringVar):
+        """Open the login URL in a new browser tab and poll until signed in."""
+        cfg  = LOGIN_CONFIG[retailer]
+        url  = cfg["url"]
+        sels = [s.strip() for s in cfg["logged_in_sel"].split(",")]
 
-    def _attempt_login(self, retailer, email, password, status_var):
-        def _login(page: Page) -> bool:
-            # Use a dedicated fresh page for each login so the shared
-            # monitoring page cannot interfere via cross-navigation.
-            login_page = page.context.new_page()
-            try:
-                if retailer == "target":
-                    login_page.goto("https://www.target.com/account/login",
-                                    wait_until="domcontentloaded", timeout=20000)
-                    try:
-                        login_page.wait_for_load_state("networkidle", timeout=10000)
-                    except:
-                        pass
-
-                    login_page.wait_for_selector("#username", timeout=15000)
-                    time.sleep(random.uniform(0.8, 1.5))
-                    human_type(login_page, "#username", email)
-                    try:
-                        human_click(login_page, "button[type='submit']")
-                    except:
-                        pass
-
-                    # After email submit — handle method picker OR direct password field
-                    try:
-                        # Wait for either: password field directly, or the method-picker page
-                        login_page.wait_for_selector(
-                            # Direct password field (skip picker)
-                            "input[type='password'], "
-                            # New 3-option method picker ("Enter your password")
-                            "button:has-text('Enter your password'), "
-                            "a:has-text('Enter your password'), "
-                            # Legacy passkey dismissal options
-                            "button[data-test='passkey-cancel-button'], "
-                            "a[data-test='use-password-link'], "
-                            "button:has-text('Use password'), "
-                            "button:has-text('Sign in with a password'), "
-                            "[data-test='passkeys-cancel']",
-                            timeout=10000
-                        )
-                        # If the password field is NOT yet visible, click through the method picker
-                        if not login_page.is_visible("input[type='password']"):
-                            for sel in [
-                                # New method picker options (preferred)
-                                "button:has-text('Enter your password')",
-                                "a:has-text('Enter your password')",
-                                "[data-test='password-option']",
-                                "[data-test*='enter-password']",
-                                # Legacy passkey dismissal fallbacks
-                                "button[data-test='passkey-cancel-button']",
-                                "a[data-test='use-password-link']",
-                                "button:has-text('Use password')",
-                                "button:has-text('Sign in with a password')",
-                                "[data-test='passkeys-cancel']",
-                            ]:
-                                try:
-                                    login_page.click(sel, timeout=2000)
-                                    break
-                                except:
-                                    continue
-                    except:
-                        pass
-
-                    login_page.wait_for_selector("input[type='password']", timeout=10000)
-                    time.sleep(random.uniform(0.5, 1.0))
-                    human_type(login_page, "input[type='password']", password)
-                    time.sleep(random.uniform(0.4, 0.9))
-                    human_click(login_page, "button[type='submit']")
-
-                    try:
-                        login_page.wait_for_url(
-                            re.compile(r"(?!.*(/signin|/login)).*target\.com.*"),
-                            timeout=20000
-                        )
-                    except:
-                        pass
-                    # Check if Target showed an on-page error
-                    err_sel = "[data-test='errorMessage'], .errorMessage, [class*='error']"
-                    try:
-                        err_el = login_page.query_selector(err_sel)
-                        if err_el and err_el.is_visible():
-                            err_text = err_el.inner_text()
-                            print(f"[Login:target] Page error: {err_text}")
-                    except Exception:
-                        pass
-                    url = login_page.url.lower()
-                    return "target.com" in url and "signin" not in url and "login" not in url
-
-                elif retailer == "walmart":
-                    # ---- helper: detect DataDome / generic captcha ----
-                    def _captcha_present(page):
-                        for sel in [
-                            "iframe[src*='datadome']",
-                            "iframe[src*='captcha']",
-                            "#captcha-holder",
-                            "#dd-captcha",
-                            "iframe[title*='DataDome']",
-                            "iframe[title*='CAPTCHA']",
-                        ]:
-                            try:
-                                el = page.query_selector(sel)
-                                if el and el.is_visible():
-                                    return True
-                            except Exception:
-                                pass
-                        raw_url = page.url.lower()
-                        return "captcha" in raw_url or "datadome" in raw_url
-
-                    # Bug 1 fix: include input[name='userName'] and use state=visible
-                    email_sel = (
-                        "#email, "
-                        "input[name='email'], "
-                        "input[name='userName'], "
-                        "input[type='email'], "
-                        "input[autocomplete='email'], "
-                        "input[autocomplete='username']"
-                    )
-
-                    # Retry loop: initial attempt + up to 2 retries on timeout
-                    for attempt in range(3):
-                        try:
-                            login_page.goto(
-                                "https://www.walmart.com/account/login",
-                                wait_until="domcontentloaded", timeout=20000,
-                            )
-                            try:
-                                login_page.wait_for_load_state("networkidle", timeout=12000)
-                            except Exception:
-                                pass
-
-                            # CAPTCHA check after goto
-                            if _captcha_present(login_page):
-                                if not self._wait_for_captcha_solve(status_var):
-                                    return False
-                                # Reload login page after captcha solved
-                                login_page.goto(
-                                    "https://www.walmart.com/account/login",
-                                    wait_until="domcontentloaded", timeout=20000,
-                                )
-                                try:
-                                    login_page.wait_for_load_state("networkidle", timeout=12000)
-                                except Exception:
-                                    pass
-
-                            # Human-like mouse movement before interacting
-                            login_page.mouse.move(
-                                random.randint(200, 600),
-                                random.randint(150, 400),
-                                steps=random.randint(15, 30),
-                            )
-                            time.sleep(random.uniform(0.8, 1.5))
-
-                            # Step 1 — enter email / phone
-                            login_page.wait_for_selector(
-                                email_sel, state="visible", timeout=15000
-                            )
-                            if _captcha_present(login_page):
-                                if not self._wait_for_captcha_solve(status_var):
-                                    return False
-                                login_page.wait_for_selector(
-                                    email_sel, state="visible", timeout=15000
-                                )
-                            time.sleep(random.uniform(1.0, 2.0))
-                            human_type(login_page, email_sel, email)
-                            time.sleep(random.uniform(0.5, 1.0))
-
-                            # Click Continue to advance to the password page
-                            human_click(login_page, "button[type='submit']")
-                            time.sleep(random.uniform(0.8, 1.5))
-
-                            # Step 2 — enter password
-                            login_page.wait_for_selector(
-                                "input[type='password']", state="visible", timeout=15000
-                            )
-                            if _captcha_present(login_page):
-                                if not self._wait_for_captcha_solve(status_var):
-                                    return False
-                            time.sleep(random.uniform(0.8, 1.5))
-                            human_type(login_page, "input[type='password']", password)
-                            time.sleep(random.uniform(0.4, 0.9))
-
-                            # Submit sign-in
-                            human_click(login_page, "button[type='submit']")
-
-                            try:
-                                login_page.wait_for_url(
-                                    re.compile(r"walmart\.com(?!/account/login)"),
-                                    timeout=20000,
-                                )
-                            except Exception:
-                                pass
-                            url = login_page.url
-                            parsed = urllib.parse.urlparse(url)
-                            host = parsed.netloc.lower()
-                            path = parsed.path.lower()
-                            return (
-                                host.endswith("walmart.com")
-                                and host != "identity.walmart.com"
-                                and "/account/login" not in path
-                            )
-
-                        except Exception as attempt_err:
-                            print(f"[Login:walmart] attempt {attempt + 1} error: {attempt_err}")
-                            if attempt >= 2:
-                                raise
-                            time.sleep(2)
-                    return False
-
-            except Exception as login_err:
-                print(f"[Login:{retailer}] error: {login_err}")
-                return False
-            finally:
-                try:
-                    login_page.close()
-                except:
-                    pass
+        def _open(page: Page):
+            new_pg = page.context.new_page()
+            new_pg.goto(url, wait_until="domcontentloaded", timeout=20000)
+            return True
 
         try:
-            ok = self.pw.submit(_login, f"login:{retailer}", timeout=60)
+            self.pw.submit(_open, f"manual_login_open:{retailer}", timeout=30)
+        except Exception as e:
+            self.after(0, lambda: status_var.set(f"Could not open browser: {e}"))
+            self._polling = False
+            return
+
+        self.after(0, lambda: status_var.set(
+            "Waiting for you to sign in... (up to 5 min)"))
+
+        def _check(page: Page) -> bool:
+            for pg in page.context.pages:
+                for sel in sels:
+                    try:
+                        el = pg.query_selector(sel)
+                        if el and el.is_visible():
+                            return True
+                    except Exception:
+                        pass
+            return False
+
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            if not self._polling:
+                return  # Skip was pressed; abandon this poll loop
+            try:
+                ok = self.pw.submit(_check,
+                                    f"manual_login_check:{retailer}",
+                                    timeout=10)
+            except Exception:
+                ok = False
+
             if ok:
+                self.pw.save_session()
                 if retailer == "target":
                     self._target_ok = True
                 else:
                     self._walmart_ok = True
-                self.pw.save_session()
-                self.after(0, lambda: status_var.set("Login successful!"))
+                self.after(0, lambda: status_var.set("Signed in successfully!"))
                 self.after(800, self._next)
-            else:
-                self.after(0, lambda: status_var.set(
-                    "Login failed -- check credentials or try again."))
-        except Exception as e:
-            _msg = str(e)[:60]
-            self.after(0, lambda: status_var.set(f"Error: {_msg}"))
+                return
 
-    # ------------------------------------------------------------------ captcha
-    def _show_captcha_resume_btn(self, status_var):
-        """Show a 'Resume after CAPTCHA' button in the UI (called from bg thread)."""
-        def _ui():
-            status_var.set(
-                "⚠️  CAPTCHA detected — solve it in the browser, then click Resume."
-            )
-            try:
-                if self._captcha_btn and self._captcha_btn.winfo_exists():
-                    return
-            except Exception:
-                pass
-            self._captcha_btn = tk.Button(
-                self._container,
-                text="▶  Resume after CAPTCHA",
-                command=self._on_captcha_solved,
-                bg="#f59e0b", fg="#1a1a2e",
-                font=("Helvetica", 10, "bold"),
-                relief="flat", padx=14, pady=8,
-            )
-            self._captcha_btn.pack(pady=4)
-        self.after(0, _ui)
+            remaining = int(deadline - time.monotonic())
+            self.after(0, lambda r=remaining: status_var.set(
+                f"Waiting for sign-in... ({r // 60}m {r % 60:02d}s remaining)"
+            ))
 
-    def _on_captcha_solved(self):
-        """Called when the user clicks the Resume button."""
-        self._captcha_event.set()
-        try:
-            if self._captcha_btn and self._captcha_btn.winfo_exists():
-                self._captcha_btn.destroy()
-        except Exception:
-            pass
-        self._captcha_btn = None
-
-    def _wait_for_captcha_solve(self, status_var, timeout=300):
-        """Block the login thread until the user signals CAPTCHA is solved.
-
-        Args:
-            status_var: tkinter StringVar used to display status messages.
-            timeout: Maximum seconds to wait (default: 300).
-
-        Returns:
-            True if the user clicked Resume within the timeout, False otherwise.
-        """
-        self._captcha_event.clear()
-        self._show_captcha_resume_btn(status_var)
-        return self._captcha_event.wait(timeout=timeout)
+        self.after(0, lambda: status_var.set(
+            "Timed out. Press Skip or click the button again."))
+        self._polling = False
 
     # ------------------------------------------------------------------ done
     def _build_done(self):

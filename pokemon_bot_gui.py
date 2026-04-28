@@ -3,6 +3,10 @@ from tkinter import ttk, scrolledtext, messagebox
 import threading
 import json
 import os
+import subprocess
+import urllib.request
+import urllib.error
+from pathlib import Path
 
 from playwright_manager import PlaywrightManager
 from cart_manager        import CartManager
@@ -13,12 +17,15 @@ from stock_checker       import check_stock
 from link_finder         import discover_links, load_products
 from config              import (
     DEFAULT_BUDGET,
-    MAX_ITEMS_PER_CATEGORY, get_credentials,
+    MAX_ITEMS_PER_CATEGORY,
     DISCORD_WEBHOOK,
 )
 
 SESSION_FILE  = "sessions.json"
 PRODUCTS_FILE = "products.json"
+
+_VERSION_URL  = "https://raw.githubusercontent.com/tnewc3/pkb/main/pkb/version.txt"
+_INSTALL_DIR  = Path(os.environ.get("LOCALAPPDATA", "")) / "PokemonCardBot"
 
 CATEGORIES = {
     "ETBs":               {"prio": 1, "keywords": ["elite trainer"]},
@@ -152,7 +159,6 @@ class PokemonBotGUI:
 
         self.session_guard = SessionGuard(
             pw=self.pw,
-            get_credentials=get_credentials,
             on_session_lost=self._on_session_lost,
             on_session_restored=self._on_session_restored,
             on_log=self._log,
@@ -160,6 +166,8 @@ class PokemonBotGUI:
 
         self.settings.on_change(self._on_settings_changed)
         threading.Thread(target=self._init_playwright, daemon=True).start()
+        threading.Thread(target=self._check_for_updates_bg,
+                         args=(False,), daemon=True).start()
 
     def _init_playwright(self):
         self._set_status("Starting browser...")
@@ -238,11 +246,12 @@ class PokemonBotGUI:
                   ).pack(side="left", padx=4)
 
         for text, cmd, bg, fg in [
-            ("Start",            self.engine.start,      "#4ade80", "#1a1a2e"),
-            ("Stop",             self.engine.stop,       "#e94560", "white"),
-            ("Re-Login",         self._relogin,          "#facc15", "#1a1a2e"),
-            ("Settings",         self._open_settings,    "#0f3460", "#a8dadc"),
-            ("Refresh Products", self._refresh_products, "#0f3460", "#a8dadc"),
+            ("Start",            self.engine.start,          "#4ade80", "#1a1a2e"),
+            ("Stop",             self.engine.stop,           "#e94560", "white"),
+            ("Re-Login",         self._relogin,              "#facc15", "#1a1a2e"),
+            ("Settings",         self._open_settings,        "#0f3460", "#a8dadc"),
+            ("Refresh Products", self._refresh_products,     "#0f3460", "#a8dadc"),
+            ("Check Updates",    self._check_for_updates,    "#0f3460", "#a8dadc"),
         ]:
             tk.Button(top, text=text, command=cmd,
                       bg=bg, fg=fg,
@@ -512,7 +521,16 @@ class PokemonBotGUI:
         if not any(self.session_guard.is_logged_in(r)
                    for r in ["target", "walmart"]):
             self.engine.stop()
-            self._log("All sessions expired - bot paused.")
+            self._log("All sessions expired — bot paused.")
+        # Prompt the user to sign back in manually
+        name = retailer.capitalize()
+        self.root.after(0, lambda: messagebox.showwarning(
+            f"{name} Session Expired",
+            f"Your {name} session has expired.\n\n"
+            f"Click  Re-Login  in the toolbar, then sign in to {name} "
+            f"in the browser window that opens.\n\n"
+            f"The bot will resume automatically once you're signed in.",
+        ))
 
     def _on_session_restored(self, retailer: str):
         self.root.after(0,
@@ -573,6 +591,71 @@ class PokemonBotGUI:
     def _update_local_cart_bar(self):
         self.cart_total_lbl.config(text=f"${self.cart.local_total():.2f}")
         self.cart_count_lbl.config(text=f"({self.cart.count()} items)")
+
+    # ── UPDATE CHECK ─────────────────────────────────────────────────────────
+
+    def _check_for_updates(self):
+        """Manual check — always shows a result dialog."""
+        threading.Thread(target=self._check_for_updates_bg,
+                         args=(True,), daemon=True).start()
+
+    def _check_for_updates_bg(self, interactive: bool):
+        try:
+            req = urllib.request.Request(
+                _VERSION_URL,
+                headers={"User-Agent": "PokemonCardBot-Updater/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                remote = resp.read().decode().strip()
+        except Exception:
+            if interactive:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "Update Check Failed",
+                    "Could not reach the update server.\n"
+                    "Check your internet connection and try again.",
+                ))
+            return
+
+        ver_file = _INSTALL_DIR / "version.txt"
+        local = ver_file.read_text(encoding="utf-8").strip() if ver_file.exists() else "unknown"
+
+        if local == remote:
+            if interactive:
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Up to Date",
+                    f"You are running the latest version ({remote}).",
+                ))
+            return
+
+        self._log(f"[UPDATE] New version available: {remote}  (installed: {local})")
+
+        def _prompt():
+            if messagebox.askyesno(
+                "Update Available",
+                f"A new version is available!\n\n"
+                f"  Installed : {local}\n"
+                f"  Latest    : {remote}\n\n"
+                f"Install now? The bot will close after updating.",
+            ):
+                self._run_updater()
+        self.root.after(0, _prompt)
+
+    def _run_updater(self):
+        update_bat = _INSTALL_DIR / "update.bat"
+        if not update_bat.exists():
+            messagebox.showerror(
+                "Updater Not Found",
+                f"update.bat was not found in:\n{_INSTALL_DIR}\n\n"
+                "Re-run the installer to restore it.",
+            )
+            return
+        subprocess.Popen(
+            ["cmd", "/c", str(update_bat)],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        self.root.after(500, self.root.destroy)
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _set_status(self, msg: str):
         if hasattr(self, "status_lbl"):
