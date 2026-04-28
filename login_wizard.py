@@ -4,7 +4,7 @@ import threading
 import subprocess
 import os
 from pathlib import Path
-from playwright_manager import _find_chrome, _CHROME_USER_DATA
+from playwright_manager import _find_edge, _EDGE_USER_DATA
 
 LOGIN_CONFIG = {
     "target": {
@@ -77,7 +77,7 @@ class LoginWizard(tk.Toplevel):
         self._progress(0)
         self._spacer(20)
         self._btn("Begin Setup", self._next, "#4ade80")
-        profile_cookies = _CHROME_USER_DATA / "Default" / "Network" / "Cookies"
+        profile_cookies = _EDGE_USER_DATA / "Default" / "Network" / "Cookies"
         if profile_cookies.exists():
             self._spacer(6)
             tk.Label(self._container,
@@ -158,18 +158,18 @@ class LoginWizard(tk.Toplevel):
                               done_btn: tk.Button):
         """Launch a plain Chrome process (no CDP) for the user to log in."""
         try:
-            chrome_exe = _find_chrome()
+            edge_exe = _find_edge()
         except FileNotFoundError as e:
             self.after(0, lambda: status_var.set(str(e)))
             return
 
-        # Kill any previous login Chrome before launching a new one
+        # Kill any previous login Edge before launching a new one
         self._kill_chrome()
 
         try:
             self._chrome_proc = subprocess.Popen(
                 [
-                    chrome_exe,
+                    edge_exe,
                     f"--user-data-dir={_CHROME_USER_DATA}",
                     "--profile-directory=Default",
                     "--no-first-run",

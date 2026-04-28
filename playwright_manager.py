@@ -12,33 +12,31 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext
 SESSION_FILE = "sessions.json"
 CDP_PORT     = 9222
 
-# Real Chrome default profile — has years of history/cookies that pass bot-detection.
-# The bot uses this instead of an empty custom profile.
-_CHROME_USER_DATA = Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"
+# Edge passes PerimeterX where Chrome doesn't — use Edge's real profile.
+_EDGE_USER_DATA = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"
 
-_CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+_EDGE_CANDIDATES = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
 ]
 
 
-def _find_chrome() -> str:
-    """Return path to the real Chrome executable, or raise."""
+def _find_edge() -> str:
+    """Return path to the Edge executable, or raise."""
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe") as k:
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe") as k:
             path = winreg.QueryValue(k, None)
             if path and Path(path).exists():
                 return path
     except Exception:
         pass
-    for p in _CHROME_CANDIDATES:
+    for p in _EDGE_CANDIDATES:
         if Path(p).exists():
             return str(p)
     raise FileNotFoundError(
-        "Google Chrome not found. Install Chrome from https://www.google.com/chrome/ and try again."
+        "Microsoft Edge not found. Edge is required to bypass bot detection."
     )
 
 
@@ -130,16 +128,16 @@ class PlaywrightManager:
         from config import HEADLESS, PROXY_URL
 
         try:
-            chrome_exe = _find_chrome()
+            edge_exe = _find_edge()
         except FileNotFoundError as e:
             print(f"[PlaywrightManager] ERROR: {e}")
             self._ready.set()
             return
 
         chrome_args = [
-            chrome_exe,
+            edge_exe,
             f"--remote-debugging-port={CDP_PORT}",
-            f"--user-data-dir={_CHROME_USER_DATA}",
+            f"--user-data-dir={_EDGE_USER_DATA}",
             "--profile-directory=Default",
             "--no-first-run",
             "--no-default-browser-check",
