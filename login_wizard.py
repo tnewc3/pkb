@@ -170,7 +170,7 @@ class LoginWizard(tk.Toplevel):
             self._chrome_proc = subprocess.Popen(
                 [
                     edge_exe,
-                    f"--user-data-dir={_CHROME_USER_DATA}",
+                    f"--user-data-dir={_EDGE_USER_DATA}",
                     "--profile-directory=Default",
                     "--no-first-run",
                     "--no-default-browser-check",
