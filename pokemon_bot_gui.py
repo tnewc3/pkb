@@ -24,7 +24,7 @@ from config              import (
 SESSION_FILE  = "sessions.json"
 PRODUCTS_FILE = "products.json"
 
-_VERSION_URL  = "https://raw.githubusercontent.com/tnewc3/pkb/main/pkb/version.txt"
+_VERSION_URL  = "https://raw.githubusercontent.com/tnewc3/pkb/main/version.txt"
 _INSTALL_DIR  = Path(os.environ.get("LOCALAPPDATA", "")) / "PokemonCardBot"
 
 CATEGORIES = {

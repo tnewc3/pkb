@@ -14,32 +14,33 @@ from pathlib import Path
 REPO_OWNER = "tnewc3"
 REPO_NAME  = "pkb"
 BRANCH     = "main"
-RAW_BASE   = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/pkb"
+RAW_BASE   = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}"
 
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA")) / "PokemonCardBot"
 VENV_DIR    = INSTALL_DIR / "venv"
 
-BOT_FILES = [
-    "pokemon_bot_gui.py",
-    "login_wizard.py",
-    "playwright_manager.py",
-    "session_guard.py",
-    "settings_screen.py",
-    "link_finder.py",
-    "stock_checker.py",
-    "cart_manager.py",
-    "atc.py",
-    "retry_worker.py",
-    "captcha_handler.py",
-    "captcha_solver.py",
-    "stealth_setup.py",
-    "notifier.py",
-    "config.py",
-    "proxy_manager.py",
-    "proxy_panel.py",
-    "update.py",
-    "version.txt",
-]
+# Maps destination filename -> path in the repo
+FILE_SOURCES = {
+    "pokemon_bot_gui.py":   "pokemon_bot_gui.py",
+    "login_wizard.py":      "login_wizard.py",
+    "playwright_manager.py": "playwright_manager.py",
+    "session_guard.py":     "session_guard.py",
+    "settings_screen.py":   "settings_screen.py",
+    "link_finder.py":       "link_finder.py",
+    "stock_checker.py":     "stock_checker.py",
+    "cart_manager.py":      "cart_manager.py",
+    "atc.py":               "atc.py",
+    "retry_worker.py":      "retry_worker.py",
+    "captcha_handler.py":   "captcha_handler.py",
+    "captcha_solver.py":    "captcha_solver.py",
+    "stealth_setup.py":     "stealth_setup.py",
+    "notifier.py":          "notifier.py",
+    "config.py":            "config.py",
+    "proxy_manager.py":     "proxy_manager.py",
+    "proxy_panel.py":       "proxy_panel.py",
+    "update.py":            "build/update.py",   # lives in build/ on the repo
+    "version.txt":          "version.txt",
+}
 
 
 def _fetch_text(url: str) -> str:
@@ -139,21 +140,20 @@ class Updater:
         updated = 0
         failed  = []
 
-        for fname in BOT_FILES:
-            url = f"{RAW_BASE}/{fname}"
-            dst = INSTALL_DIR / fname
+        for dest_name, repo_path in FILE_SOURCES.items():
+            url = f"{RAW_BASE}/{repo_path}"
+            dst = INSTALL_DIR / dest_name
             try:
                 data = _fetch_bytes(url)
-                # Write atomically so a partial download never corrupts the live file
                 tmp = dst.with_suffix(dst.suffix + ".tmp")
                 tmp.write_bytes(data)
                 tmp.replace(dst)
                 updated += 1
             except Exception as e:
-                failed.append(fname)
-                self.errors.append(f"{fname}: {e}")
+                failed.append(dest_name)
+                self.errors.append(f"{dest_name}: {e}")
 
-        print(f"   Updated {updated}/{len(BOT_FILES)} files")
+        print(f"   Updated {updated}/{len(FILE_SOURCES)} files")
         if failed:
             print(f"   Could not update: {', '.join(failed)}")
 
@@ -165,7 +165,7 @@ class Updater:
 
         try:
             reqs_text = _fetch_text(
-                f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/pkb/requirements.txt"
+                f"{RAW_BASE}/requirements.txt"
             )
         except Exception:
             print("   Could not fetch requirements.txt — skipping package update")
