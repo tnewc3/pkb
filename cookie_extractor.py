@@ -18,26 +18,66 @@ _LOCAL_STATE    = _EDGE_USER_DATA / "Local State"
 _TMP_COOKIES    = Path(os.environ.get("TEMP", "")) / "_pkb_cookies_tmp.db"
 
 
-def _find_cookies_db() -> Path:
+class CookieExtractionError(Exception):
+    """Raised with a human-readable explanation of why extraction failed."""
+
+
+def _is_profile_dir(p: Path) -> bool:
+    """A real Edge profile directory contains a Preferences file."""
+    return p.is_dir() and (p / "Preferences").exists()
+
+
+def _find_cookies_db_for_domain(domain: str) -> Path:
     """
-    Find the Edge cookies DB for the profile that has the most cookies
-    (handles non-Default profile names like 'Profile 1').
+    Find the Edge cookies DB belonging to the profile that actually contains
+    cookies for the given domain. Falls back to largest DB if none match.
     """
+    if not _EDGE_USER_DATA.exists():
+        raise CookieExtractionError(
+            "Edge user data folder not found. "
+            "Make sure Microsoft Edge is installed and has been opened at least once."
+        )
+
     candidates = []
     for profile_dir in _EDGE_USER_DATA.iterdir():
+        if not _is_profile_dir(profile_dir):
+            continue
         db = profile_dir / "Network" / "Cookies"
         if db.exists():
             candidates.append(db)
+
     if not candidates:
-        raise FileNotFoundError(
-            "Edge cookie database not found. "
-            "Make sure Edge is installed and has been opened at least once."
+        raise CookieExtractionError(
+            "No Edge profiles with a cookie database were found. "
+            "Open Edge, sign in, then close it and try again."
         )
-    # Prefer the profile with the most cookies (most likely the active one)
-    return max(candidates, key=lambda p: p.stat().st_size)
 
+    pattern = f"%{domain.lstrip('.')}"
+    best = None
+    best_count = -1
+    for db in candidates:
+        try:
+            tmp = Path(str(_TMP_COOKIES) + f".scan_{db.parent.parent.name}")
+            shutil.copy2(db, tmp)
+            try:
+                conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM cookies WHERE host_key LIKE ?",
+                    (pattern,),
+                ).fetchone()[0]
+                conn.close()
+            finally:
+                try: tmp.unlink()
+                except Exception: pass
+            if count > best_count:
+                best_count = count
+                best = db
+        except Exception:
+            continue
 
-_COOKIES_DB = _EDGE_USER_DATA / "Default" / "Network" / "Cookies"
+    if best is None:
+        best = max(candidates, key=lambda p: p.stat().st_size)
+    return best
 
 
 class _DATABLOB(ctypes.Structure):
@@ -56,37 +96,80 @@ def _dpapi_decrypt(data: bytes) -> bytes:
         ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
     )
     if not ok:
-        raise RuntimeError("DPAPI decryption failed — are you running as the correct user?")
+        raise RuntimeError("DPAPI decryption failed")
     result = ctypes.string_at(blob_out.pbData, blob_out.cbData)
     ctypes.windll.kernel32.LocalFree(blob_out.pbData)
     return result
 
 
-def _get_aes_key() -> bytes:
-    """Return the AES-256 master key used to encrypt Edge cookie values."""
+def _load_local_state() -> dict:
     if not _LOCAL_STATE.exists():
-        raise FileNotFoundError("Edge Local State file not found. Is Microsoft Edge installed?")
+        raise CookieExtractionError("Edge Local State file not found. Is Microsoft Edge installed?")
     with open(_LOCAL_STATE, "r", encoding="utf-8") as f:
-        state = json.load(f)
+        return json.load(f)
+
+
+def _get_aes_key(state: dict) -> bytes:
+    """Return the AES-256 master key used to encrypt v10/v11 cookie values."""
     enc_key_b64 = state.get("os_crypt", {}).get("encrypted_key", "")
     if not enc_key_b64:
-        raise ValueError("Could not find encrypted_key in Edge Local State.")
+        raise CookieExtractionError("Could not find encrypted_key in Edge Local State.")
     enc_key = base64.b64decode(enc_key_b64)
-    # First 5 bytes are the literal string "DPAPI" — strip them
-    return _dpapi_decrypt(enc_key[5:])
+    return _dpapi_decrypt(enc_key[5:])  # skip "DPAPI" prefix
 
 
-def _decrypt_cookie_value(enc_value: bytes, key: bytes) -> str:
-    """Decrypt a single cookie value (AES-256-GCM or legacy DPAPI)."""
-    if enc_value[:3] in (b"v10", b"v11"):
-        # AES-256-GCM: [3 bytes version][12 bytes nonce][ciphertext+16 byte tag]
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        nonce      = enc_value[3:15]
-        ciphertext = enc_value[15:]
-        return AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
-    else:
-        # Legacy DPAPI-encrypted value (older Edge versions)
-        return _dpapi_decrypt(enc_value).decode("utf-8")
+def _get_app_bound_key(state: dict):
+    """
+    Return the AES-256 key used for v20 (app-bound) cookies, or None if it
+    can't be obtained without elevation.
+
+    The app-bound key is stored as base64("APPB" + DPAPI_SYSTEM(DPAPI_USER(key))).
+    Decrypting the SYSTEM layer requires running as SYSTEM (or via Edge's
+    IElevator COM service). We attempt user-DPAPI only — works on some
+    configurations, otherwise returns None.
+    """
+    enc_b64 = state.get("os_crypt", {}).get("app_bound_encrypted_key", "")
+    if not enc_b64:
+        return None
+    try:
+        blob = base64.b64decode(enc_b64)
+        if blob[:4] != b"APPB":
+            return None
+        inner = blob[4:]
+        try:
+            once = _dpapi_decrypt(inner)
+        except Exception:
+            return None
+        try:
+            twice = _dpapi_decrypt(once)
+            candidate = twice
+        except Exception:
+            candidate = once
+        if len(candidate) == 32:
+            return candidate
+        if len(candidate) >= 33:
+            return candidate[-32:]
+        return None
+    except Exception:
+        return None
+
+
+def _decrypt_v10(enc_value: bytes, key: bytes) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce      = enc_value[3:15]
+    ciphertext = enc_value[15:]
+    return AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
+
+
+def _decrypt_v20(enc_value: bytes, key: bytes) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce      = enc_value[3:15]
+    ciphertext = enc_value[15:]
+    plaintext  = AESGCM(key).decrypt(nonce, ciphertext, None)
+    # v20 plaintext is prefixed with 32 bytes of metadata before the actual value
+    if len(plaintext) > 32:
+        return plaintext[32:].decode("utf-8", errors="replace")
+    return plaintext.decode("utf-8", errors="replace")
 
 
 def extract_cookies(domains: list) -> list:
@@ -95,33 +178,42 @@ def extract_cookies(domains: list) -> list:
 
     Returns a list of dicts compatible with Playwright's context.add_cookies().
     Edge must be CLOSED before calling this (SQLite WAL lock).
-
-    Example:
-        cookies = extract_cookies([".target.com", "target.com"])
     """
     if not _EDGE_USER_DATA.exists():
-        raise FileNotFoundError(
+        raise CookieExtractionError(
             "Edge cookie database not found. "
             "Make sure Edge is installed and has been opened at least once."
         )
 
-    cookies_db = _find_cookies_db()
-    key = _get_aes_key()
+    primary_domain = next((d for d in domains if d), "")
+    cookies_db = _find_cookies_db_for_domain(primary_domain)
+    state      = _load_local_state()
+    aes_key    = _get_aes_key(state)
+    abe_key    = _get_app_bound_key(state)
 
-    # Copy the DB so we don't hold a lock on Edge's live file
     shutil.copy2(cookies_db, _TMP_COOKIES)
-    # Also copy WAL/SHM files if present (needed for consistent reads)
     for ext in ("-wal", "-shm"):
         src = Path(str(cookies_db) + ext)
         if src.exists():
             shutil.copy2(src, Path(str(_TMP_COOKIES) + ext))
 
     cookies = []
+    total_rows      = 0
+    fail_v20_no_key = 0
+    fail_v20        = 0
+    fail_v10        = 0
+    fail_other      = 0
+
     try:
-        conn = sqlite3.connect(f"file:{_TMP_COOKIES}?mode=ro", uri=True)
+        try:
+            conn = sqlite3.connect(f"file:{_TMP_COOKIES}?mode=ro", uri=True)
+        except sqlite3.OperationalError as e:
+            raise CookieExtractionError(
+                "Could not open Edge's cookie database — Edge is probably still running. "
+                "Close all msedge.exe processes (check Task Manager) and try again."
+            ) from e
+
         conn.row_factory = sqlite3.Row
-        # Match any host that ends with one of the given domain strings
-        # e.g. "target.com" matches ".target.com", "www.target.com", etc.
         conditions = " OR ".join("host_key LIKE ?" for _ in domains)
         patterns   = [f"%{d.lstrip('.')}" for d in domains]
         rows = conn.execute(
@@ -132,25 +224,39 @@ def extract_cookies(domains: list) -> list:
         ).fetchall()
         conn.close()
 
-        for row in rows:
-            try:
-                value = _decrypt_cookie_value(bytes(row["encrypted_value"]), key)
-            except Exception:
-                continue  # skip cookies we can't decrypt
+        total_rows = len(rows)
 
-            # Playwright wants domain with leading dot for host cookies
+        for row in rows:
+            enc = bytes(row["encrypted_value"])
+            prefix = enc[:3]
+            try:
+                if prefix in (b"v10", b"v11"):
+                    value = _decrypt_v10(enc, aes_key)
+                elif prefix == b"v20":
+                    if abe_key is None:
+                        fail_v20_no_key += 1
+                        continue
+                    value = _decrypt_v20(enc, abe_key)
+                else:
+                    value = _dpapi_decrypt(enc).decode("utf-8")
+            except Exception:
+                if prefix == b"v20":
+                    fail_v20 += 1
+                elif prefix in (b"v10", b"v11"):
+                    fail_v10 += 1
+                else:
+                    fail_other += 1
+                continue
+
             domain = row["host_key"]
             if not domain.startswith("."):
                 domain = "." + domain
 
-            # Edge stores expiry as microseconds since Jan 1, 1601.
-            # Convert to Unix timestamp (seconds since Jan 1, 1970).
             expires_utc = row["expires_utc"]
             if expires_utc and expires_utc > 0:
-                # 11644473600 seconds between 1601-01-01 and 1970-01-01
                 expires = (expires_utc / 1_000_000) - 11_644_473_600
             else:
-                expires = -1  # session cookie
+                expires = -1
 
             cookies.append({
                 "name":     row["name"],
@@ -165,9 +271,26 @@ def extract_cookies(domains: list) -> list:
         for f in [_TMP_COOKIES,
                   Path(str(_TMP_COOKIES) + "-wal"),
                   Path(str(_TMP_COOKIES) + "-shm")]:
-            try:
-                f.unlink()
-            except Exception:
-                pass
+            try: f.unlink()
+            except Exception: pass
+
+    if total_rows > 0 and not cookies:
+        if fail_v20_no_key > 0:
+            raise CookieExtractionError(
+                f"Found {total_rows} cookies but they use Edge's new App-Bound "
+                f"Encryption (v20), which requires elevated decryption.\n\n"
+                f"Workarounds:\n"
+                f"  1. In Edge open  edge://flags , search 'app bound', "
+                f"disable \"App-Bound Encryption\", restart Edge, sign in to "
+                f"Target again, then retry import.\n"
+                f"  2. Or use the manual Walmart-style sign-in flow instead."
+            )
+        if fail_v20 > 0 or fail_v10 > 0:
+            raise CookieExtractionError(
+                f"Found {total_rows} cookies but decryption failed "
+                f"(v10/v11 fails: {fail_v10}, v20 fails: {fail_v20}, "
+                f"other fails: {fail_other}).\n"
+                f"Sign out and back into Edge, then retry."
+            )
 
     return cookies

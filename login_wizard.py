@@ -141,25 +141,33 @@ class LoginWizard(tk.Toplevel):
     def _import_target_cookies(self, status_var: tk.StringVar, btn: tk.Button):
         """Read Target cookies from Edge's SQLite database and save them."""
         try:
-            from cookie_extractor import extract_cookies
+            from cookie_extractor import extract_cookies, CookieExtractionError
             cookies = extract_cookies(["target.com"])
+        except CookieExtractionError as e:
+            err_msg = str(e)
+            self.after(0, lambda m=err_msg: messagebox.showerror("Cookie Import Failed", m))
+            self.after(0, lambda m=err_msg: status_var.set(m.splitlines()[0]))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
         except FileNotFoundError as e:
-            self.after(0, lambda: status_var.set(str(e)))
+            err_msg = str(e)
+            self.after(0, lambda m=err_msg: status_var.set(m))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
             return
         except Exception as e:
-            msg = str(e)
-            if "Edge" in msg or "close" in msg.lower():
+            err_msg = str(e)
+            if "Edge" in err_msg or "close" in err_msg.lower() or "lock" in err_msg.lower():
                 self.after(0, lambda: status_var.set(
                     "Close Edge completely (including Task Manager), then try again."))
             else:
-                self.after(0, lambda: status_var.set(f"Error: {e}"))
+                self.after(0, lambda m=err_msg: status_var.set(f"Error: {m}"))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
             return
 
         if not cookies:
             self.after(0, lambda: status_var.set(
-                "No Target cookies found. Make sure you're signed into Target in Edge."))
+                "No Target cookies found. Make sure you're signed into Target in Edge "
+                "(visit target.com in Edge and confirm you see your account name)."))
             self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
             return
 
