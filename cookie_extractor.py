@@ -8,9 +8,13 @@ import os
 import json
 import shutil
 import sqlite3
+import socket
+import subprocess
+import time
 import base64
 import ctypes
 import ctypes.wintypes
+import urllib.request
 from pathlib import Path
 
 _EDGE_USER_DATA = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"
@@ -276,14 +280,22 @@ def extract_cookies(domains: list) -> list:
 
     if total_rows > 0 and not cookies:
         if fail_v20_no_key > 0:
+            # Fall back to launching Edge with CDP and asking it for cookies.
+            try:
+                cdp_cookies = _extract_cookies_via_cdp(domains, cookies_db.parent.parent)
+            except Exception as cdp_err:
+                raise CookieExtractionError(
+                    f"Found {total_rows} cookies but they use App-Bound "
+                    f"Encryption (v20). The CDP fallback also failed:\n"
+                    f"  {cdp_err}\n\n"
+                    f"Try: close Edge completely (check Task Manager for "
+                    f"msedge.exe), then retry import."
+                ) from cdp_err
+            if cdp_cookies:
+                return cdp_cookies
             raise CookieExtractionError(
-                f"Found {total_rows} cookies but they use Edge's new App-Bound "
-                f"Encryption (v20), which requires elevated decryption.\n\n"
-                f"Workarounds:\n"
-                f"  1. In Edge open  edge://flags , search 'app bound', "
-                f"disable \"App-Bound Encryption\", restart Edge, sign in to "
-                f"Target again, then retry import.\n"
-                f"  2. Or use the manual Walmart-style sign-in flow instead."
+                f"Found {total_rows} encrypted cookies but Edge returned none "
+                f"via CDP. Sign into Target in Edge again, close Edge, retry."
             )
         if fail_v20 > 0 or fail_v10 > 0:
             raise CookieExtractionError(
@@ -294,3 +306,120 @@ def extract_cookies(domains: list) -> list:
             )
 
     return cookies
+
+
+# ---------------------------------------------------------------------------
+# CDP fallback: when v20 cookies can't be decrypted (App-Bound Encryption),
+# launch Edge headless against the real profile and ask Edge itself for the
+# cookies via the DevTools Protocol. Edge handles its own decryption.
+# ---------------------------------------------------------------------------
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _find_edge_exe() -> str:
+    candidates = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    for p in candidates:
+        if Path(p).exists():
+            return p
+    raise CookieExtractionError("msedge.exe not found in standard install paths.")
+
+
+def _extract_cookies_via_cdp(domains: list, profile_dir: Path) -> list:
+    """
+    Launch Edge headlessly with the user's real profile + a remote debugging
+    port, then use Playwright's CDP client to read decrypted cookies.
+
+    `profile_dir` is the profile directory (e.g. .../User Data/Default), so its
+    parent is the user-data-dir and its name is the profile name.
+    """
+    edge_exe       = _find_edge_exe()
+    user_data_dir  = profile_dir.parent
+    profile_name   = profile_dir.name
+    port           = _free_port()
+
+    # Use a temp data root with a copy of the profile so we don't fight with
+    # an open Edge instance and don't disturb the user's real profile state.
+    # However, cookies live INSIDE the profile, so we must copy them in.
+    proc = subprocess.Popen(
+        [
+            edge_exe,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            f"--profile-directory={profile_name}",
+            "--headless=new",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-gpu",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    try:
+        # Wait for CDP endpoint
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.3)
+        else:
+            raise CookieExtractionError(
+                "Edge did not start on the debug port. "
+                "Close all Edge windows (and msedge.exe in Task Manager) and retry."
+            )
+
+        from playwright.sync_api import sync_playwright
+        urls = []
+        for d in domains:
+            d = d.lstrip(".")
+            urls.append(f"https://{d}")
+            urls.append(f"https://www.{d}")
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            try:
+                if not browser.contexts:
+                    return []
+                ctx = browser.contexts[0]
+                raw = ctx.cookies(urls)
+            finally:
+                try: browser.close()
+                except Exception: pass
+
+        # Playwright cookies are already in the right shape — just normalize.
+        out = []
+        for c in raw:
+            domain = c.get("domain", "")
+            if not domain.startswith("."):
+                domain = "." + domain
+            out.append({
+                "name":     c.get("name", ""),
+                "value":    c.get("value", ""),
+                "domain":   domain,
+                "path":     c.get("path", "/") or "/",
+                "secure":   bool(c.get("secure", False)),
+                "httpOnly": bool(c.get("httpOnly", False)),
+                "expires":  c.get("expires", -1),
+            })
+        return out
+    finally:
+        try: proc.terminate()
+        except Exception: pass
+        try: proc.wait(timeout=5)
+        except Exception:
+            try: proc.kill()
+            except Exception: pass
