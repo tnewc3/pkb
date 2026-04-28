@@ -2,10 +2,12 @@ import threading
 import queue
 import json
 import os
+from pathlib import Path
 from typing import Callable, Any
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 SESSION_FILE = "sessions.json"
+PROFILE_DIR  = Path(os.environ.get("LOCALAPPDATA", "")) / "PokemonCardBot" / "chrome-profile"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -67,15 +69,9 @@ class PlaywrightManager:
         self._queue.put(job)
 
     def save_session(self):
-        def _save(page: Page):
-            state = page.context.storage_state()
-            with open(SESSION_FILE, "w") as f:
-                json.dump(state, f)
-            return True
-        try:
-            self.submit(_save, "save_session", timeout=15)
-        except Exception as e:
-            print(f"Save session error: {e}")
+        # With a persistent profile the browser saves cookies/storage automatically.
+        # This is kept as a no-op so existing callers don't break.
+        pass
 
     def stop(self):
         self._stopped = True
@@ -87,43 +83,58 @@ class PlaywrightManager:
 
     def _run(self):
         from config import HEADLESS, PROXY_URL
+
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
         with sync_playwright() as pw:
             self._pw = pw
 
-            launch_args = {
+            launch_kwargs = {
                 "headless": HEADLESS,
+                # Strip Playwright's own --enable-automation flag — Akamai checks for it
+                "ignore_default_args": ["--enable-automation"],
                 "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ]
-            }
-            if PROXY_URL:
-                launch_args["proxy"] = {"server": PROXY_URL}
-
-            try:
-                self._browser = pw.chromium.launch(channel="chrome", **launch_args)
-            except Exception as e:
-                print(f"[PlaywrightManager] Real Chrome unavailable ({e}), falling back to bundled Chromium.")
-                self._browser = pw.chromium.launch(**launch_args)
-
-            storage = SESSION_FILE if os.path.exists(SESSION_FILE) else None
-            self._context = self._browser.new_context(
-                storage_state=storage,
-                user_agent=HEADERS["User-Agent"],
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US",
-                extra_http_headers={
-                    "accept-language": "en-US,en;q=0.9",
-                    "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                    "sec-ch-ua-mobile": "?0",
+                    "--no-first-run",
+                    "--no-service-autorun",
+                    "--disable-infobars",
+                    "--password-store=basic",
+                    "--use-mock-keychain",
+                ],
+                "user_agent":    HEADERS["User-Agent"],
+                "viewport":      {"width": 1920, "height": 1080},
+                "locale":        "en-US",
+                "extra_http_headers": {
+                    "accept-language":    "en-US,en;q=0.9",
+                    "sec-ch-ua":          '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                    "sec-ch-ua-mobile":   "?0",
                     "sec-ch-ua-platform": '"Windows"',
                 },
-            )
+            }
+            if PROXY_URL:
+                launch_kwargs["proxy"] = {"server": PROXY_URL}
 
+            try:
+                # Use real Chrome with a persistent profile — accumulates cookies/history
+                # so the browser looks like a real used machine to bot-detection.
+                self._context = pw.chromium.launch_persistent_context(
+                    str(PROFILE_DIR), channel="chrome", **launch_kwargs
+                )
+            except Exception as e:
+                print(
+                    f"[PlaywrightManager] ERROR: Google Chrome is required but could not be launched: {e}\n"
+                    f"  Download Chrome from https://www.google.com/chrome/ and try again."
+                )
+                # Hard fail — do not fall back to Chromium silently
+                self._ready.set()
+                return
+
+            self._browser = None  # not used with persistent context
             self._apply_stealth(self._context)
-            self._page = self._context.new_page()
-            self._page.set_extra_http_headers(HEADERS)
+
+            # Re-use any page already open in the profile, or open a blank one
+            self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
             self._ready.set()
 
             while not self._stopped:
@@ -138,7 +149,7 @@ class PlaywrightManager:
                     print(f"[PlaywrightThread] Error: {e}")
 
             try:
-                self._browser.close()
+                self._context.close()
             except:
                 pass
 
