@@ -165,6 +165,14 @@ class PokemonBotGUI:
         )
 
         self.settings.on_change(self._on_settings_changed)
+        # Apply persisted intervals to engine and session guard at startup
+        # (so saved values from .env actually take effect, not just runtime changes).
+        try:
+            self.engine.CHECK_INTERVAL = self.settings.get_int("CHECK_INTERVAL", 30)
+            import session_guard as _sg
+            _sg.SESSION_CHECK_INTERVAL = self.settings.get_int("SESSION_CHECK_INTERVAL", 300)
+        except Exception as _e:
+            print(f"Could not apply startup settings: {_e}")
         threading.Thread(target=self._init_playwright, daemon=True).start()
         threading.Thread(target=self._check_for_updates_bg,
                          args=(False,), daemon=True).start()

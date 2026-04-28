@@ -20,6 +20,14 @@ LOGIN_CHECKS = {
 
 
 def check_session(pw: PlaywrightManager, retailer: str) -> bool:
+    """
+    Probe the retailer's account page and decide if we're still logged in.
+
+    Be conservative: only return False when we have *positive* evidence the
+    user is logged out (e.g. redirected to a login URL). On network errors,
+    timeouts, or ambiguous pages, assume still-logged-in to avoid spurious
+    "session expired" warnings — a real ATC failure will catch true expiry.
+    """
     cfg = LOGIN_CHECKS.get(retailer)
     if not cfg:
         return True
@@ -29,20 +37,33 @@ def check_session(pw: PlaywrightManager, retailer: str) -> bool:
             page.goto(cfg["url"],
                       wait_until="domcontentloaded", timeout=15000)
             page.wait_for_timeout(2000)
+        except Exception:
+            # Network hiccup or bot-wall — don't punish the user, assume OK
+            return True
+
+        try:
+            url_lower = (page.url or "").lower()
+            # Positive logged-out signal: redirected to a login/signin URL
+            if "/login" in url_lower or "/signin" in url_lower or \
+               "account/login" in url_lower:
+                return False
+            # Positive logged-in signal: greeting / username element present
             if page.query_selector(cfg["logged_in_sel"]):
                 return True
+            # Logged-out selector AND no logged-in selector → expired
             if page.query_selector(cfg["logged_out_sel"]):
                 return False
-            if "login" in page.url.lower() or "signin" in page.url.lower():
-                return False
+        except Exception:
             return True
-        except:
-            return False
+
+        # Ambiguous: selectors changed or page renders client-side. Assume OK.
+        return True
 
     try:
         return pw.submit(_check, f"session_check:{retailer}", timeout=25)
-    except:
-        return False
+    except Exception:
+        # Even the job itself crashed — don't flip to expired
+        return True
 
 
 class SessionGuard:
