@@ -11,18 +11,18 @@ SESSION_FILE = "sessions.json"
 
 LOGIN_CONFIG = {
     "target": {
-        "url":          "https://www.target.com/account/login",
+        "url":           "https://www.target.com",
         "logged_in_sel": "[data-test='accountNav-greeting']",
-        "color":        "#e94560",
-        "logo":         "Target",
-        "pct":          33,
+        "color":         "#e94560",
+        "logo":          "Target",
+        "pct":           33,
     },
     "walmart": {
-        "url":          "https://www.walmart.com/account/login",
+        "url":           "https://www.walmart.com",
         "logged_in_sel": ".account-menu__user-info, [data-automation-id='user-name']",
-        "color":        "#0071ce",
-        "logo":         "Walmart",
-        "pct":          66,
+        "color":         "#0071ce",
+        "logo":          "Walmart",
+        "pct":           66,
     },
 }
 
@@ -97,8 +97,8 @@ class LoginWizard(tk.Toplevel):
         self._title(f"Sign in to {logo}")
         self._spacer(8)
         self._label(
-            f"1.  Click  'Open {logo} Login Page'  below.\n"
-            f"2.  Sign in to {logo} in the browser window that opens.\n"
+            f"1.  Click  'Open {logo}'  below to open the {logo} homepage.\n"
+            f"2.  Click the sign-in icon on the site and log in normally.\n"
             f"3.  The bot detects your login automatically —\n"
             f"    no need to come back and click anything."
         )
@@ -115,7 +115,7 @@ class LoginWizard(tk.Toplevel):
         btn_row.pack(fill="x", pady=8)
 
         open_btn = tk.Button(
-            btn_row, text=f"Open {logo} Login Page",
+            btn_row, text=f"Open {logo}",
             bg=color, fg="white",
             font=("Helvetica", 10, "bold"),
             relief="flat", padx=14, pady=8,
