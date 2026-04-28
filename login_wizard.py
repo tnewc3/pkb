@@ -261,7 +261,7 @@ class LoginWizard(tk.Toplevel):
                   relief="flat", padx=10, pady=8,
                   ).pack(side="left")
 
-
+    def _kill_chrome(self):
         """Terminate the login Chrome subprocess if it's still running."""
         if self._chrome_proc is not None:
             try:
