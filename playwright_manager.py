@@ -2,12 +2,53 @@ import threading
 import queue
 import json
 import os
+import subprocess
+import time
+import urllib.request
 from pathlib import Path
 from typing import Callable, Any
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 SESSION_FILE = "sessions.json"
 PROFILE_DIR  = Path(os.environ.get("LOCALAPPDATA", "")) / "PokemonCardBot" / "chrome-profile"
+CDP_PORT     = 9222
+
+_CHROME_CANDIDATES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+]
+
+
+def _find_chrome() -> str:
+    """Return path to the real Chrome executable, or raise."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe") as k:
+            path = winreg.QueryValue(k, None)
+            if path and Path(path).exists():
+                return path
+    except Exception:
+        pass
+    for p in _CHROME_CANDIDATES:
+        if Path(p).exists():
+            return str(p)
+    raise FileNotFoundError(
+        "Google Chrome not found. Install Chrome from https://www.google.com/chrome/ and try again."
+    )
+
+
+def _wait_for_cdp(port: int, timeout: float = 15.0):
+    """Block until Chrome's CDP endpoint is accepting connections."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=1)
+            return
+        except Exception:
+            time.sleep(0.4)
+    raise TimeoutError(f"Chrome CDP did not become available on port {port}")
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -42,14 +83,15 @@ class PlaywrightJob:
 
 class PlaywrightManager:
     def __init__(self):
-        self._queue   = queue.Queue()
-        self._page    = None
-        self._context = None
-        self._browser = None
-        self._pw      = None
-        self._thread  = None
-        self._ready   = threading.Event()
-        self._stopped = False
+        self._queue        = queue.Queue()
+        self._page         = None
+        self._context      = None
+        self._browser      = None
+        self._pw           = None
+        self._thread       = None
+        self._ready        = threading.Event()
+        self._stopped      = False
+        self._chrome_proc  = None
 
     def start(self):
         self._thread = threading.Thread(
@@ -86,55 +128,70 @@ class PlaywrightManager:
 
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
+        # --- Launch Chrome as a plain subprocess — no Playwright launcher flags ---
+        # This means Chrome starts with zero automation signals; PerimeterX sees a
+        # completely normal browser.  Playwright only connects AFTER Chrome is running.
+        try:
+            chrome_exe = _find_chrome()
+        except FileNotFoundError as e:
+            print(f"[PlaywrightManager] ERROR: {e}")
+            self._ready.set()
+            return
+
+        chrome_args = [
+            chrome_exe,
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={PROFILE_DIR}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--no-service-autorun",
+            "--disable-sync",
+            "--password-store=basic",
+            "--use-mock-keychain",
+        ]
+        if HEADLESS:
+            chrome_args.append("--headless=new")
+        if PROXY_URL:
+            chrome_args.append(f"--proxy-server={PROXY_URL}")
+
+        try:
+            self._chrome_proc = subprocess.Popen(
+                chrome_args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"[PlaywrightManager] ERROR launching Chrome: {e}")
+            self._ready.set()
+            return
+
+        # Wait for CDP to be ready
+        try:
+            _wait_for_cdp(CDP_PORT)
+        except TimeoutError as e:
+            print(f"[PlaywrightManager] ERROR: {e}")
+            self._chrome_proc.terminate()
+            self._ready.set()
+            return
+
         with sync_playwright() as pw:
             self._pw = pw
 
-            launch_kwargs = {
-                "headless": HEADLESS,
-                # Strip Playwright's own --enable-automation flag — Akamai checks for it
-                "ignore_default_args": ["--enable-automation"],
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--no-first-run",
-                    "--no-service-autorun",
-                    "--disable-infobars",
-                    "--password-store=basic",
-                    "--use-mock-keychain",
-                ],
-                "user_agent":    HEADERS["User-Agent"],
-                "viewport":      {"width": 1920, "height": 1080},
-                "locale":        "en-US",
-                "extra_http_headers": {
-                    "accept-language":    "en-US,en;q=0.9",
-                    "sec-ch-ua":          '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                    "sec-ch-ua-mobile":   "?0",
-                    "sec-ch-ua-platform": '"Windows"',
-                },
-            }
-            if PROXY_URL:
-                launch_kwargs["proxy"] = {"server": PROXY_URL}
-
             try:
-                # Use real Chrome with a persistent profile — accumulates cookies/history
-                # so the browser looks like a real used machine to bot-detection.
-                self._context = pw.chromium.launch_persistent_context(
-                    str(PROFILE_DIR), channel="chrome", **launch_kwargs
-                )
+                self._browser = pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
             except Exception as e:
-                print(
-                    f"[PlaywrightManager] ERROR: Google Chrome is required but could not be launched: {e}\n"
-                    f"  Download Chrome from https://www.google.com/chrome/ and try again."
-                )
-                # Hard fail — do not fall back to Chromium silently
+                print(f"[PlaywrightManager] ERROR connecting to Chrome: {e}")
+                self._chrome_proc.terminate()
                 self._ready.set()
                 return
 
-            self._browser = None  # not used with persistent context
+            contexts = self._browser.contexts
+            self._context = contexts[0] if contexts else self._browser.new_context()
+
             self._apply_stealth(self._context)
 
-            # Re-use any page already open in the profile, or open a blank one
-            self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+            pages = self._context.pages
+            self._page = pages[0] if pages else self._context.new_page()
             self._ready.set()
 
             while not self._stopped:
@@ -149,9 +206,14 @@ class PlaywrightManager:
                     print(f"[PlaywrightThread] Error: {e}")
 
             try:
-                self._context.close()
-            except:
+                self._browser.close()
+            except Exception:
                 pass
+
+        try:
+            self._chrome_proc.terminate()
+        except Exception:
+            pass
 
     def _process(self, job: PlaywrightJob):
         try:
