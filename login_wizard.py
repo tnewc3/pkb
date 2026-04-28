@@ -3,7 +3,8 @@ from tkinter import messagebox
 import threading
 import subprocess
 import os
-from playwright_manager import PROFILE_DIR, _find_chrome
+from pathlib import Path
+from playwright_manager import _find_chrome, _CHROME_USER_DATA
 
 LOGIN_CONFIG = {
     "target": {
@@ -76,7 +77,7 @@ class LoginWizard(tk.Toplevel):
         self._progress(0)
         self._spacer(20)
         self._btn("Begin Setup", self._next, "#4ade80")
-        profile_cookies = PROFILE_DIR / "Default" / "Network" / "Cookies"
+        profile_cookies = _CHROME_USER_DATA / "Default" / "Network" / "Cookies"
         if profile_cookies.exists():
             self._spacer(6)
             tk.Label(self._container,
@@ -169,10 +170,10 @@ class LoginWizard(tk.Toplevel):
             self._chrome_proc = subprocess.Popen(
                 [
                     chrome_exe,
-                    f"--user-data-dir={PROFILE_DIR}",
+                    f"--user-data-dir={_CHROME_USER_DATA}",
+                    "--profile-directory=Default",
                     "--no-first-run",
                     "--no-default-browser-check",
-                    "--no-service-autorun",
                     url,
                 ],
                 stdout=subprocess.DEVNULL,

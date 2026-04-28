@@ -10,8 +10,11 @@ from typing import Callable, Any
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 SESSION_FILE = "sessions.json"
-PROFILE_DIR  = Path(os.environ.get("LOCALAPPDATA", "")) / "PokemonCardBot" / "chrome-profile"
 CDP_PORT     = 9222
+
+# Real Chrome default profile — has years of history/cookies that pass bot-detection.
+# The bot uses this instead of an empty custom profile.
+_CHROME_USER_DATA = Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"
 
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -126,11 +129,6 @@ class PlaywrightManager:
     def _run(self):
         from config import HEADLESS, PROXY_URL
 
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
-        # --- Launch Chrome as a plain subprocess — no Playwright launcher flags ---
-        # This means Chrome starts with zero automation signals; PerimeterX sees a
-        # completely normal browser.  Playwright only connects AFTER Chrome is running.
         try:
             chrome_exe = _find_chrome()
         except FileNotFoundError as e:
@@ -141,13 +139,12 @@ class PlaywrightManager:
         chrome_args = [
             chrome_exe,
             f"--remote-debugging-port={CDP_PORT}",
-            f"--user-data-dir={PROFILE_DIR}",
+            f"--user-data-dir={_CHROME_USER_DATA}",
+            "--profile-directory=Default",
             "--no-first-run",
             "--no-default-browser-check",
             "--no-service-autorun",
-            "--disable-sync",
-            "--password-store=basic",
-            "--use-mock-keychain",
+            "--no-restore-last-session",
         ]
         if HEADLESS:
             chrome_args.append("--headless=new")
