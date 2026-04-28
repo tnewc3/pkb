@@ -325,7 +325,7 @@ class PokemonBotGUI:
         c  = tk.Canvas(self.panels_tab, bg="#1a1a2e", highlightthickness=0)
         sb = ttk.Scrollbar(self.panels_tab, orient="vertical", command=c.yview)
         self.panels_frame = tk.Frame(c, bg="#1a1a2e")
-        self.panels_frame.bind("<Configure",
+        self.panels_frame.bind("<Configure>",
             lambda e: c.configure(scrollregion=c.bbox("all")))
         c.create_window((0, 0), window=self.panels_frame, anchor="nw")
         c.configure(yscrollcommand=sb.set)
