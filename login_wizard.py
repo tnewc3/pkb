@@ -142,6 +142,17 @@ class LoginWizard(tk.Toplevel):
         """Read Target cookies from Edge's SQLite database and save them."""
         try:
             from cookie_extractor import extract_cookies, CookieExtractionError
+        except ImportError as e:
+            err_msg = (
+                f"cookie_extractor module is missing from the install: {e}\n\n"
+                f"Run the updater (update.bat) to fetch the latest files."
+            )
+            self.after(0, lambda m=err_msg: messagebox.showerror("Cookie Import Failed", m))
+            self.after(0, lambda: status_var.set("cookie_extractor module missing — run update.bat"))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
+
+        try:
             cookies = extract_cookies(["target.com"])
         except CookieExtractionError as e:
             err_msg = str(e)

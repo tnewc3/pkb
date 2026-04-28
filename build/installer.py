@@ -54,6 +54,7 @@ PACKAGES = [
 BOT_FILES = [
     "pokemon_bot_gui.py",
     "login_wizard.py",
+    "cookie_extractor.py",
     "playwright_manager.py",
     "session_guard.py",
     "settings_screen.py",
