@@ -184,6 +184,7 @@ class PlaywrightManager:
             self._context = contexts[0] if contexts else self._browser.new_context()
 
             self._apply_stealth(self._context)
+            self._inject_saved_cookies(self._context)
 
             pages = self._context.pages
             self._page = pages[0] if pages else self._context.new_page()
@@ -209,6 +210,20 @@ class PlaywrightManager:
             self._chrome_proc.terminate()
         except Exception:
             pass
+
+    def _inject_saved_cookies(self, context: BrowserContext):
+        """Load cookies from sessions.json into the browser context."""
+        if not os.path.exists(SESSION_FILE):
+            return
+        try:
+            with open(SESSION_FILE, "r") as f:
+                session = json.load(f)
+            cookies = session.get("cookies", [])
+            if cookies:
+                context.add_cookies(cookies)
+                print(f"[PlaywrightManager] Injected {len(cookies)} saved cookies.")
+        except Exception as e:
+            print(f"[PlaywrightManager] Could not load sessions.json: {e}")
 
     def _process(self, job: PlaywrightJob):
         try:

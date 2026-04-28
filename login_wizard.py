@@ -2,9 +2,12 @@ import tkinter as tk
 from tkinter import messagebox
 import threading
 import subprocess
+import json
 import os
 from pathlib import Path
 from playwright_manager import _find_edge, _EDGE_USER_DATA
+
+SESSION_FILE = "sessions.json"
 
 LOGIN_CONFIG = {
     "target": {
@@ -66,10 +69,9 @@ class LoginWizard(tk.Toplevel):
         self._title("Welcome to Pokemon Card Bot")
         self._spacer(10)
         self._label(
-            "This wizard logs you into Target and Walmart so the bot\n"
+            "This wizard signs you into Target and Walmart so the bot\n"
             "can monitor stock and add items to your cart automatically.\n\n"
-            "Your session is saved locally in  sessions.json  and is\n"
-            "never uploaded anywhere.\n\n"
+            "Your session is saved locally and never uploaded anywhere.\n\n"
             "You only need to do this once -- sessions are reused on\n"
             "every future launch until they expire."
         )
@@ -77,8 +79,7 @@ class LoginWizard(tk.Toplevel):
         self._progress(0)
         self._spacer(20)
         self._btn("Begin Setup", self._next, "#4ade80")
-        profile_cookies = _EDGE_USER_DATA / "Default" / "Network" / "Cookies"
-        if profile_cookies.exists():
+        if os.path.exists(SESSION_FILE):
             self._spacer(6)
             tk.Label(self._container,
                      text="Saved session found -- you can skip setup.",
@@ -87,6 +88,100 @@ class LoginWizard(tk.Toplevel):
             self._btn("Skip (use saved session)", self._jump_done, "#0f3460")
 
     def _build_login(self, retailer: str):
+        if retailer == "target":
+            self._build_target_import()
+        else:
+            self._build_edge_login(retailer)
+
+    def _build_target_import(self):
+        """Target: extract session cookies directly from Edge's cookie DB.
+        No browser automation — completely sidesteps PerimeterX."""
+        self._title("Sign in to Target")
+        self._spacer(8)
+        self._label(
+            "1.  Open Edge and sign into Target normally.\n"
+            "2.  Close Edge completely (all windows).\n"
+            "3.  Click  'Import Target Session'  below."
+        )
+        self._spacer(12)
+        self._progress(33)
+        self._spacer(16)
+
+        status_var = tk.StringVar(value="")
+        tk.Label(self._container, textvariable=status_var,
+                 font=("Helvetica", 9), fg="#facc15",
+                 bg="#1a1a2e").pack()
+
+        btn_row = tk.Frame(self._container, bg="#1a1a2e")
+        btn_row.pack(fill="x", pady=8)
+
+        import_btn = tk.Button(
+            btn_row, text="Import Target Session",
+            bg="#e94560", fg="white",
+            font=("Helvetica", 10, "bold"),
+            relief="flat", padx=14, pady=8,
+        )
+        import_btn.pack(side="left", padx=(0, 8))
+
+        def _on_import():
+            import_btn.config(state="disabled", text="Importing...")
+            threading.Thread(target=self._import_target_cookies,
+                             args=(status_var, import_btn), daemon=True).start()
+
+        import_btn.config(command=_on_import)
+
+        tk.Button(btn_row, text="Skip",
+                  command=self._next,
+                  bg="#3b3b6b", fg="#ccc",
+                  font=("Helvetica", 9),
+                  relief="flat", padx=10, pady=8,
+                  ).pack(side="left")
+
+    def _import_target_cookies(self, status_var: tk.StringVar, btn: tk.Button):
+        """Read Target cookies from Edge's SQLite database and save them."""
+        try:
+            from cookie_extractor import extract_cookies
+            cookies = extract_cookies([
+                ".target.com", "target.com",
+                ".gsp.target.com", "gsp.target.com",
+            ])
+        except FileNotFoundError as e:
+            self.after(0, lambda: status_var.set(str(e)))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
+        except Exception as e:
+            msg = str(e)
+            if "Edge" in msg or "close" in msg.lower():
+                self.after(0, lambda: status_var.set(
+                    "Close Edge completely, then try again."))
+            else:
+                self.after(0, lambda: status_var.set(f"Error: {e}"))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
+
+        if not cookies:
+            self.after(0, lambda: status_var.set(
+                "No Target cookies found. Make sure you're signed into Target in Edge."))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
+
+        # Save to sessions.json in Playwright storage_state format
+        session = {"cookies": cookies, "origins": []}
+        try:
+            with open(SESSION_FILE, "w") as f:
+                json.dump(session, f)
+        except Exception as e:
+            self.after(0, lambda: status_var.set(f"Could not save session: {e}"))
+            self.after(0, lambda: btn.config(state="normal", text="Import Target Session"))
+            return
+
+        self._target_ok = True
+        self.after(0, lambda: status_var.set(
+            f"Imported {len(cookies)} cookies successfully!"))
+        self.after(800, self._next)
+
+    def _build_edge_login(self, retailer: str):
+        """Walmart (and any future retailer): open Edge for manual login."""
         cfg   = LOGIN_CONFIG[retailer]
         color = cfg["color"]
         logo  = cfg["logo"]
@@ -94,10 +189,9 @@ class LoginWizard(tk.Toplevel):
         self._title(f"Sign in to {logo}")
         self._spacer(8)
         self._label(
-            f"1.  Click  'Open {logo}'  below to open the {logo} homepage.\n"
-            f"2.  Click the sign-in icon on the site and log in normally.\n"
-            f"3.  The bot detects your login automatically —\n"
-            f"    no need to come back and click anything."
+            f"1.  Click  'Open {logo}'  below.\n"
+            f"2.  Sign into {logo} in the browser that opens.\n"
+            f"3.  Click  'I've signed in \u2713'  when done."
         )
         self._spacer(12)
         self._progress(cfg["pct"])
@@ -112,7 +206,7 @@ class LoginWizard(tk.Toplevel):
         btn_row.pack(fill="x", pady=8)
 
         done_btn = tk.Button(
-            btn_row, text="I've signed in ✓",
+            btn_row, text="I've signed in \u2713",
             bg="#4ade80", fg="#1a1a2e",
             font=("Helvetica", 10, "bold"),
             relief="flat", padx=14, pady=8,
@@ -129,9 +223,7 @@ class LoginWizard(tk.Toplevel):
         open_btn.pack(side="left", padx=(0, 8))
 
         def _on_done():
-            if retailer == "target":
-                self._target_ok = True
-            else:
+            if retailer == "walmart":
                 self._walmart_ok = True
             self._next()
 
@@ -139,11 +231,26 @@ class LoginWizard(tk.Toplevel):
 
         def _on_open():
             open_btn.config(state="disabled")
-            threading.Thread(
-                target=self._launch_login_chrome,
-                args=(cfg["url"], status_var, done_btn),
-                daemon=True,
-            ).start()
+            try:
+                edge_exe = _find_edge()
+            except FileNotFoundError as e:
+                status_var.set(str(e))
+                open_btn.config(state="normal")
+                return
+            self._kill_chrome()
+            try:
+                self._chrome_proc = subprocess.Popen(
+                    [edge_exe, "--no-first-run",
+                     "--no-default-browser-check", cfg["url"]],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                status_var.set(f"Could not open browser: {e}")
+                open_btn.config(state="normal")
+                return
+            status_var.set("Sign in, then click 'I've signed in \u2713' above.")
+            done_btn.config(state="normal")
 
         open_btn.config(command=_on_open)
 
@@ -154,41 +261,7 @@ class LoginWizard(tk.Toplevel):
                   relief="flat", padx=10, pady=8,
                   ).pack(side="left")
 
-    def _launch_login_chrome(self, url: str, status_var: tk.StringVar,
-                              done_btn: tk.Button):
-        """Launch a plain Chrome process (no CDP) for the user to log in."""
-        try:
-            edge_exe = _find_edge()
-        except FileNotFoundError as e:
-            self.after(0, lambda: status_var.set(str(e)))
-            return
 
-        # Kill any previous login Edge before launching a new one
-        self._kill_chrome()
-
-        try:
-            self._chrome_proc = subprocess.Popen(
-                [
-                    edge_exe,
-                    f"--user-data-dir={_EDGE_USER_DATA}",
-                    "--profile-directory=Default",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    url,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as e:
-            self.after(0, lambda: status_var.set(f"Could not open browser: {e}"))
-            return
-
-        self.after(0, lambda: status_var.set(
-            "Sign in, then click  'I've signed in ✓'  above."
-        ))
-        self.after(0, lambda: done_btn.config(state="normal"))
-
-    def _kill_chrome(self):
         """Terminate the login Chrome subprocess if it's still running."""
         if self._chrome_proc is not None:
             try:

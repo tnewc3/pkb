@@ -21,6 +21,7 @@ VENV_DIR    = INSTALL_DIR / "venv"
 
 # Maps destination filename -> path in the repo
 FILE_SOURCES = {
+    "cookie_extractor.py":  "cookie_extractor.py",
     "pokemon_bot_gui.py":   "pokemon_bot_gui.py",
     "login_wizard.py":      "login_wizard.py",
     "playwright_manager.py": "playwright_manager.py",
